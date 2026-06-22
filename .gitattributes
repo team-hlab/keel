@@ -1,0 +1,3 @@
+# Normalize line endings; keep shell scripts LF so the shim works on any clone.
+* text=auto eol=lf
+*.png binary

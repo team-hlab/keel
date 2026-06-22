@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "keel"
+version = "0.1.0"
+description = "A lean, cross-platform hook harness for first-party AI coding agents (Claude Code, Codex, Antigravity)."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.8"
+authors = [{ name = "hubtwork" }]
+keywords = ["claude-code", "codex", "antigravity", "hooks", "permissions", "agent"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Topic :: Software Development :: Quality Assurance",
+]
+dependencies = []   # zero third-party deps, by design
+
+[project.scripts]
+keel = "keel.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/hubtwork/keel"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/keel"]

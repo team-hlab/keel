@@ -1,0 +1,9 @@
+{
+  "features": {
+    "autopermit":     { "sensitiveFilePatterns": [".env*", "*.key", "*.pem", "credentials*", "*secret*"] },
+    "branch-guard":   { "protected": ["main", "master", "develop"] },
+    "audit-log":      { "enabled": true, "path": ".keel/audit.log" },
+    "secret-scan":    { "enabled": true },
+    "session-banner": { "enabled": true }
+  }
+}
