@@ -23,31 +23,21 @@ pip install keel          # or: pipx install keel
 
 Zero external dependencies, so it installs instantly and can't pull in anything surprising.
 
-## Wire it into an agent
+## Attach it to an agent
 
-The hook command is always `keel run <platform> <stage>`. Example — Claude Code (`.claude/settings.json`):
+One command wires keel into the agent's hook config — idempotent and non-destructive (run it from your project root):
 
-```json
-{
-  "hooks": {
-    "PreToolUse": [
-      { "matcher": "Read|Glob|Grep|Edit|MultiEdit|Write|NotebookEdit|Bash",
-        "hooks": [{ "type": "command", "command": "keel run claude PreToolUse" }] }
-    ],
-    "PermissionRequest": [
-      { "matcher": "Read|Glob|Grep|Edit|MultiEdit|Write|NotebookEdit|Bash",
-        "hooks": [{ "type": "command", "command": "keel run claude PermissionRequest" }] }
-    ],
-    "SessionStart": [
-      { "hooks": [{ "type": "command", "command": "keel run claude SessionStart" }] }
-    ]
-  }
-}
+```sh
+keel install claude          # → .claude/settings.json
+keel install codex           # → .codex/hooks.json
+keel install antigravity     # → .agents/hooks.json
+
+keel install claude --print  # preview the merged config, write nothing
 ```
 
-Codex (`.codex/hooks.json`) and Antigravity (`.agents/hooks.json`) use the same command with `codex` / `antigravity` in place of `claude`. (Codex and Antigravity adapters are best-effort against their ~May-2026 hook APIs — verify against their live docs.)
+It registers `keel run <platform> <stage>` for `PreToolUse`, `PermissionRequest`, and `SessionStart`. If `keel` may not be on PATH in the agent's environment, register the preflight shim instead: `keel install claude --command "sh /abs/path/keel/bin/keel.sh"`.
 
-If Python might be missing in the agent's environment, register the preflight shim instead — `sh <path>/bin/keel.sh run claude PreToolUse` — which resolves Python and fails open.
+See **[docs/INSTALL.md](docs/INSTALL.md)** for details and **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for the design. (Claude Code is verified; Codex/Antigravity adapters are best-effort against their ~May-2026 hook APIs — verify against live docs.)
 
 ## Built-in features
 

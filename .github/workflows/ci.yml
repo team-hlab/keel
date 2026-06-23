@@ -46,6 +46,7 @@ jobs:
           python tests/test_shell.py
           python tests/test_engine.py
           python tests/test_features.py
+          python tests/test_install.py
           python tests/test_e2e.py
       - name: No external dependencies
         run: python tests/test_no_external_deps.py
