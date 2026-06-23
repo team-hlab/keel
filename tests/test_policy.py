@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """autopermit.policy pure unit tests."""
+
 import os
 import unittest
 
 import _bootstrap  # noqa: F401
 
 from keel.features.autopermit.policy import (  # noqa: E402
-    decide, is_sensitive, is_write_allowed, write_allow_regexes,
+    decide,
+    is_sensitive,
+    is_write_allowed,
+    write_allow_regexes,
 )
 
 ROOT = "/repo"
@@ -27,8 +31,15 @@ def d(tool, rel_or_abs):
 
 class TestSensitive(unittest.TestCase):
     def test_matches(self):
-        for p in (".env", ".env.local", "id.key", "server.pem", "credentials.json",
-                  "app-secrets.yaml", "MY_SECRET.txt"):
+        for p in (
+            ".env",
+            ".env.local",
+            "id.key",
+            "server.pem",
+            "credentials.json",
+            "app-secrets.yaml",
+            "MY_SECRET.txt",
+        ):
             self.assertTrue(is_sensitive(p, PATTERNS), p)
 
     def test_non_matches(self):
@@ -42,8 +53,12 @@ class TestSensitive(unittest.TestCase):
 
 class TestWriteAllowed(unittest.TestCase):
     def test_allowed(self):
-        for p in ("worktrees/x/a.md", "projects/foo/worktrees/f/A.kt",
-                  "projects/g/foo/worktrees/f/A.kt", ".lens/s.md"):
+        for p in (
+            "worktrees/x/a.md",
+            "projects/foo/worktrees/f/A.kt",
+            "projects/g/foo/worktrees/f/A.kt",
+            ".lens/s.md",
+        ):
             self.assertTrue(is_write_allowed(f"{ROOT}/{p}", ROOT, REGEXES), p)
 
     def test_not_allowed(self):

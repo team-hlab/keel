@@ -29,7 +29,7 @@ def head_branch(cwd):
             except OSError:
                 return None
             prefix = "ref: refs/heads/"
-            return ref[len(prefix):] if ref.startswith(prefix) else None
+            return ref[len(prefix) :] if ref.startswith(prefix) else None
         parent = os.path.dirname(cur)
         if parent == cur:
             return None

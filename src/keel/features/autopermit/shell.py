@@ -7,11 +7,15 @@ from keel.features.autopermit.policy import is_inside, is_sensitive, is_write_al
 ENV_PREFIX = re.compile(r"^(env\s+)?([A-Za-z_][A-Za-z0-9_]*=[^\s]*\s+)+")
 
 SAFE = [
-    re.compile(r"^git\s+(-C\s+\S+\s+)?(status|diff|log|show|branch|fetch|remote|"
-              r"rev-parse|ls-files|ls-tree|describe|config\s+--get|stash\s+list|"
-              r"worktree\s+list|pull|show-ref|cat-file|tag\s+-l)\b"),
-    re.compile(r"^(ls|cat|head|tail|wc|find|grep|pwd|which|command|basename|dirname|"
-              r"realpath|date|file|stat|du|df|id|whoami|printenv|ps|tree|echo|cd|true|:)\b"),
+    re.compile(
+        r"^git\s+(-C\s+\S+\s+)?(status|diff|log|show|branch|fetch|remote|"
+        r"rev-parse|ls-files|ls-tree|describe|config\s+--get|stash\s+list|"
+        r"worktree\s+list|pull|show-ref|cat-file|tag\s+-l)\b"
+    ),
+    re.compile(
+        r"^(ls|cat|head|tail|wc|find|grep|pwd|which|command|basename|dirname|"
+        r"realpath|date|file|stat|du|df|id|whoami|printenv|ps|tree|echo|cd|true|:)\b"
+    ),
     re.compile(r"^sed\s+(?!-i\b)"),
     re.compile(r"^(awk|tr|cut|jq|uniq|column|sort|diff|test)\b"),
     re.compile(r"^gh\s+(pr|issue|run|repo)\s+(view|list|checks|diff|status)\b"),
@@ -19,14 +23,19 @@ SAFE = [
 ]
 FILE_WRITE = re.compile(r"^(mkdir|cp|mv|rm|touch|chmod|ln|rsync|tee)\b")
 BUILD_TEST = [
-    re.compile(r"^\./gradlew\s"), re.compile(r"^npm\s+(test|run|install|ci|exec|ls)"),
-    re.compile(r"^(npx|bunx)\s"), re.compile(r"^bun\s+(test|run|install|add|remove|x|pm)"),
+    re.compile(r"^\./gradlew\s"),
+    re.compile(r"^npm\s+(test|run|install|ci|exec|ls)"),
+    re.compile(r"^(npx|bunx)\s"),
+    re.compile(r"^bun\s+(test|run|install|add|remove|x|pm)"),
     re.compile(r"^(yarn|pnpm)\s+(test|run|install|add|remove|exec)"),
-    re.compile(r"^pytest\b"), re.compile(r"^python3?\s+-m\s+pytest\b"),
+    re.compile(r"^pytest\b"),
+    re.compile(r"^python3?\s+-m\s+pytest\b"),
     re.compile(r"^(tsc|eslint|prettier|ruff)\b"),
 ]
-GIT_WRITE = re.compile(r"^git\s+(-C\s+\S+\s+)?(add|commit|push|checkout|switch|stash|"
-                       r"merge|rebase|cherry-pick|restore|tag)\b")
+GIT_WRITE = re.compile(
+    r"^git\s+(-C\s+\S+\s+)?(add|commit|push|checkout|switch|stash|"
+    r"merge|rebase|cherry-pick|restore|tag)\b"
+)
 
 DENY = [
     re.compile(r"\brm\s+-[a-zA-Z]*r[a-zA-Z]*f?\s+(/|~|\$HOME|/\*)(\s|$)"),
@@ -66,17 +75,33 @@ def _depth_aware_split(cmd, two_char, one_char):
             i += 1
             continue
         if ch in "\"'":
-            q = ch; buf.append(ch); i += 1; continue
+            q = ch
+            buf.append(ch)
+            i += 1
+            continue
         if ch == "(":
-            depth += 1; buf.append(ch); i += 1; continue
+            depth += 1
+            buf.append(ch)
+            i += 1
+            continue
         if ch == ")":
-            depth -= 1; buf.append(ch); i += 1; continue
+            depth -= 1
+            buf.append(ch)
+            i += 1
+            continue
         if depth == 0:
-            if cmd[i:i + 2] in two_char:
-                out.append("".join(buf)); buf = []; i += 2; continue
+            if cmd[i : i + 2] in two_char:
+                out.append("".join(buf))
+                buf = []
+                i += 2
+                continue
             if ch in one_char:
-                out.append("".join(buf)); buf = []; i += 1; continue
-        buf.append(ch); i += 1
+                out.append("".join(buf))
+                buf = []
+                i += 1
+                continue
+        buf.append(ch)
+        i += 1
     out.append("".join(buf))
     return [s.strip() for s in out if s.strip()]
 

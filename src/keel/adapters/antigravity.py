@@ -19,12 +19,11 @@ def parse(raw, stage):
     if not cwd:
         paths = raw.get("workspacePaths") or []
         cwd = paths[0] if paths else None
-    return Event(stage=stage, tool=tool, tool_input=tool_input, cwd=cwd,
-                 root=find_root(cwd), raw=raw)
+    return Event(stage=stage, tool=tool, tool_input=tool_input, cwd=cwd, root=find_root(cwd), raw=raw)
 
 
 def render(verdict, stage):
     d, reason = verdict.decision, verdict.reason
     if d in (ALLOW, DENY, ASK):
         return json.dumps({"decision": d, "reason": reason})
-    return json.dumps({})                            # pass → no decision
+    return json.dumps({})  # pass → no decision

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Engine: aggregation + routing + per-feature fail-open."""
+
 import unittest
 
 import _bootstrap  # noqa: F401
@@ -51,13 +52,11 @@ class TestRun(unittest.TestCase):
         return Event(stage=stage)
 
     def test_only_subscribed_features_run(self):
-        feats = [_Fixed("a", "PreToolUse", Verdict(ALLOW)),
-                 _Fixed("b", "SessionStart", Verdict(DENY))]
+        feats = [_Fixed("a", "PreToolUse", Verdict(ALLOW)), _Fixed("b", "SessionStart", Verdict(DENY))]
         self.assertEqual(run(self._ev("PreToolUse"), feats).decision, ALLOW)
 
     def test_aggregates_across_features(self):
-        feats = [_Fixed("a", "PreToolUse", Verdict(ALLOW)),
-                 _Fixed("b", "PreToolUse", Verdict(DENY))]
+        feats = [_Fixed("a", "PreToolUse", Verdict(ALLOW)), _Fixed("b", "PreToolUse", Verdict(DENY))]
         self.assertEqual(run(self._ev(), feats).decision, DENY)
 
     def test_misbehaving_feature_is_swallowed(self):

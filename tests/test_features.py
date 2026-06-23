@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Per-feature unit tests (autopermit, branch-guard, secret-scan, audit-log, session-banner)."""
+
 import io
 import json
 import os
@@ -80,7 +81,9 @@ class TestSecretScan(unittest.TestCase):
 
     def test_flags_credential_content(self):
         self.assertEqual(self.f.evaluate(ev("Write", content="AKIAABCDEFGHIJKLMNOP")).decision, ASK)
-        self.assertEqual(self.f.evaluate(ev("Edit", new_string="api_key = 'abcdef123456ghijkl'")).decision, ASK)
+        self.assertEqual(
+            self.f.evaluate(ev("Edit", new_string="api_key = 'abcdef123456ghijkl'")).decision, ASK
+        )
         pem = "-----BEGIN RSA PRIVATE KEY-----"
         self.assertEqual(self.f.evaluate(ev("Write", content=pem)).decision, ASK)
 

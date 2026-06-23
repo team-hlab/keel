@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """autopermit.shell pure unit tests (injected resolver, no FS)."""
+
 import os
 import unittest
 
@@ -7,7 +8,10 @@ import _bootstrap  # noqa: F401
 
 from keel.features.autopermit.policy import write_allow_regexes  # noqa: E402
 from keel.features.autopermit.shell import (  # noqa: E402
-    decide_bash, has_expansion, redirect_targets, split_segments,
+    decide_bash,
+    has_expansion,
+    redirect_targets,
+    split_segments,
 )
 
 ROOT = "/repo"
@@ -26,8 +30,18 @@ def D(cmd, cwd=ROOT):
 
 class TestSafeAllow(unittest.TestCase):
     def test_readonly(self):
-        for c in ("ls -la", "cat f", "git status", "git -C x log", "pwd", "echo hi",
-                  "grep -r foo .", "cat f | grep x | wc -l", "sed -n 1p f", "VAR=1 ls"):
+        for c in (
+            "ls -la",
+            "cat f",
+            "git status",
+            "git -C x log",
+            "pwd",
+            "echo hi",
+            "grep -r foo .",
+            "cat f | grep x | wc -l",
+            "sed -n 1p f",
+            "VAR=1 ls",
+        ):
             self.assertEqual(D(c), "allow", c)
 
     def test_quotes_protect_separators(self):
@@ -37,10 +51,20 @@ class TestSafeAllow(unittest.TestCase):
 
 class TestDeny(unittest.TestCase):
     def test_catastrophic(self):
-        for c in ("rm -rf /", "rm -rf ~", "rm -fr /*", "sudo rm -rf x",
-                  "git push --force", "git push -f origin m", "git reset --hard",
-                  "git clean -fd", "dd if=/dev/zero of=x", "mkfs.ext4 /dev/sda",
-                  "gh pr merge 3", "gh issue close 4"):
+        for c in (
+            "rm -rf /",
+            "rm -rf ~",
+            "rm -fr /*",
+            "sudo rm -rf x",
+            "git push --force",
+            "git push -f origin m",
+            "git reset --hard",
+            "git clean -fd",
+            "dd if=/dev/zero of=x",
+            "mkfs.ext4 /dev/sda",
+            "gh pr merge 3",
+            "gh issue close 4",
+        ):
             self.assertEqual(D(c), "deny", c)
 
     def test_deny_anywhere_in_chain(self):
@@ -78,8 +102,14 @@ class TestSecretAsk(unittest.TestCase):
 
 class TestPass(unittest.TestCase):
     def test_uncertain(self):
-        for c in ("weirdcmd --go", "npm test", "git -C projects/foo/main commit -m x",
-                  "echo x > /tmp/out", "cp a /etc/x", "sed -i s/a/b/ f"):
+        for c in (
+            "weirdcmd --go",
+            "npm test",
+            "git -C projects/foo/main commit -m x",
+            "echo x > /tmp/out",
+            "cp a /etc/x",
+            "sed -i s/a/b/ f",
+        ):
             self.assertEqual(D(c), "pass", c)
 
     def test_expansion(self):

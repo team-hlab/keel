@@ -27,11 +27,23 @@ def render(verdict, stage):
     d, reason = verdict.decision, verdict.reason
     if stage == "PermissionRequest":
         if d in (ALLOW, DENY):
-            return json.dumps({"hookSpecificOutput": {
-                "hookEventName": "PermissionRequest",
-                "decision": {"behavior": d, "reason": reason}}})
+            return json.dumps(
+                {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PermissionRequest",
+                        "decision": {"behavior": d, "reason": reason},
+                    }
+                }
+            )
         return json.dumps({})
     if d in (ALLOW, DENY, ASK):
-        return json.dumps({"hookSpecificOutput": {
-            "hookEventName": stage, "permissionDecision": d, "permissionDecisionReason": reason}})
+        return json.dumps(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": stage,
+                    "permissionDecision": d,
+                    "permissionDecisionReason": reason,
+                }
+            }
+        )
     return json.dumps({})

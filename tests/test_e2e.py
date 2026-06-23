@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """End-to-end: drive `python -m keel run ...` as a subprocess, asserting platform output."""
+
 import json
 import os
 import shutil
@@ -21,7 +22,7 @@ def setUpModule():
     for d in ("worktrees/f", "projects/foo/main", ".git"):
         os.makedirs(os.path.join(TROOT, d), exist_ok=True)
     with open(os.path.join(TROOT, ".git", "HEAD"), "w") as f:
-        f.write("ref: refs/heads/feature-x\n")        # non-protected → branch-guard stays quiet
+        f.write("ref: refs/heads/feature-x\n")  # non-protected → branch-guard stays quiet
     ENV = dict(os.environ, PYTHONPATH=SRC, KEEL_ROOT=TROOT)
 
 
@@ -31,8 +32,9 @@ def tearDownModule():
 
 def keel(args, payload=None, raw=None, env=None):
     data = raw if raw is not None else (json.dumps(payload) if payload is not None else "")
-    return subprocess.run([sys.executable, "-m", "keel", *args], input=data,
-                          capture_output=True, text=True, env=env or ENV)
+    return subprocess.run(
+        [sys.executable, "-m", "keel", *args], input=data, capture_output=True, text=True, env=env or ENV
+    )
 
 
 def pre(tool=None, command=None, file_path=None, content=None):
@@ -69,8 +71,9 @@ class TestClaudePreToolUse(unittest.TestCase):
 
 class TestClaudePermissionRequest(unittest.TestCase):
     def _perm(self, tool, **ti):
-        out = keel(["run", "claude", "PermissionRequest"],
-                   {"tool_name": tool, "cwd": TROOT, "tool_input": ti}).stdout
+        out = keel(
+            ["run", "claude", "PermissionRequest"], {"tool_name": tool, "cwd": TROOT, "tool_input": ti}
+        ).stdout
         o = json.loads(out)
         hso = o.get("hookSpecificOutput")
         return hso["decision"]["behavior"] if hso and "decision" in hso else "pass"
@@ -93,9 +96,11 @@ class TestBranchGuardE2E(unittest.TestCase):
             f.write("ref: refs/heads/main\n")
         env["KEEL_ROOT"] = root2
         try:
-            out = keel(["run", "claude", "PreToolUse"],
-                       {"tool_name": "Bash", "cwd": root2, "tool_input": {"command": "git commit -m x"}},
-                       env=env).stdout
+            out = keel(
+                ["run", "claude", "PreToolUse"],
+                {"tool_name": "Bash", "cwd": root2, "tool_input": {"command": "git commit -m x"}},
+                env=env,
+            ).stdout
             self.assertEqual(json.loads(out)["hookSpecificOutput"]["permissionDecision"], "deny")
         finally:
             shutil.rmtree(root2, ignore_errors=True)

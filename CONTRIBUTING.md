@@ -23,9 +23,26 @@ register it in `keel/core/registry.py`, and add tests. Permission features retur
 Adapters parse a platform's hook JSON into an `Event` and render a `Verdict` back to
 that platform's output schema. Cite the doc you verified against in the module docstring.
 
-## Tests
+## Dev setup
 
 ```sh
-python -m pytest           # or run the tests/*.py files directly (stdlib unittest)
-python tests/test_no_external_deps.py
+pip install -e ".[dev]"    # editable install + dev-only tools (ruff). No runtime deps.
 ```
+
+## Lint & format
+
+```sh
+ruff check .               # lint
+ruff format .              # auto-format
+ruff format --check .      # what CI enforces
+```
+
+## Tests
+
+The tests are plain stdlib `unittest` files — run them directly (no test-runner dependency):
+
+```sh
+for t in policy shell engine features e2e no_external_deps; do python tests/test_$t.py; done
+```
+
+CI runs both `lint` and `test` (Python 3.8 / 3.10 / 3.12 / 3.13) on every push and PR.

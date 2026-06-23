@@ -6,7 +6,8 @@ from keel.adapters import antigravity, claude_code, codex
 from keel.core import engine, registry, runtime
 
 ADAPTERS = {
-    "claude": claude_code, "claude-code": claude_code,
+    "claude": claude_code,
+    "claude-code": claude_code,
     "codex": codex,
     "antigravity": antigravity,
 }

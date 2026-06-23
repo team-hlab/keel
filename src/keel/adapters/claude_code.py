@@ -22,22 +22,26 @@ def render(verdict, stage):
 
     if stage == "PermissionRequest":
         if d in (ALLOW, DENY):
-            return json.dumps({
-                "continue": True,
-                "hookSpecificOutput": {
-                    "hookEventName": "PermissionRequest",
-                    "decision": {"behavior": d, "reason": reason},
-                },
-            })
-        return json.dumps({"continue": True})        # ask/pass → defer to the real prompt
+            return json.dumps(
+                {
+                    "continue": True,
+                    "hookSpecificOutput": {
+                        "hookEventName": "PermissionRequest",
+                        "decision": {"behavior": d, "reason": reason},
+                    },
+                }
+            )
+        return json.dumps({"continue": True})  # ask/pass → defer to the real prompt
 
     # PreToolUse-style stages carry allow/deny/ask
     if d in (ALLOW, DENY, ASK):
-        return json.dumps({
-            "hookSpecificOutput": {
-                "hookEventName": stage,
-                "permissionDecision": d,
-                "permissionDecisionReason": reason,
-            },
-        })
-    return json.dumps({"continue": True})            # pass / observer stages
+        return json.dumps(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": stage,
+                    "permissionDecision": d,
+                    "permissionDecisionReason": reason,
+                },
+            }
+        )
+    return json.dumps({"continue": True})  # pass / observer stages

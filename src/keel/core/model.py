@@ -9,19 +9,20 @@ RANK = {ALLOW: 0, PASS: 1, ASK: 2, DENY: 3}
 
 @dataclass
 class Verdict:
-    decision: str            # one of ALLOW / DENY / ASK / PASS
+    decision: str  # one of ALLOW / DENY / ASK / PASS
     reason: str = ""
-    source: str = ""         # feature name that produced it
+    source: str = ""  # feature name that produced it
 
 
 @dataclass
 class Event:
     """A platform-neutral hook event. Adapters build this; features read it."""
-    stage: str               # "PreToolUse" | "PermissionRequest" | "PostToolUse" | "SessionStart" | ...
+
+    stage: str  # "PreToolUse" | "PermissionRequest" | "PostToolUse" | "SessionStart" | ...
     tool: str = None
     tool_input: dict = field(default_factory=dict)
     cwd: str = None
-    root: str = ""           # resolved project root
+    root: str = ""  # resolved project root
     config: dict = field(default_factory=dict)
     raw: dict = field(default_factory=dict)
 

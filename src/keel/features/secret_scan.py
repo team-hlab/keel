@@ -6,10 +6,10 @@ from keel.core.model import ASK, Verdict
 from keel.features.base import Feature
 
 _PATTERNS = [
-    re.compile(r"AKIA[0-9A-Z]{16}"),                                  # AWS access key id
-    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),                # PEM private key
-    re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}"),                        # GitHub token
-    re.compile(r"xox[baprs]-[A-Za-z0-9-]{10,}"),                      # Slack token
+    re.compile(r"AKIA[0-9A-Z]{16}"),  # AWS access key id
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),  # PEM private key
+    re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}"),  # GitHub token
+    re.compile(r"xox[baprs]-[A-Za-z0-9-]{10,}"),  # Slack token
     re.compile(r"(?i)(api[_-]?key|secret|token|password)\s*[:=]\s*['\"]?[A-Za-z0-9/+_\-]{12,}"),
 ]
 

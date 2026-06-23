@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Guard: keel must import ONLY the Python standard library (+ itself)."""
+
 import ast
 import os
 import sys
@@ -11,8 +12,22 @@ PKG = os.path.join(_bootstrap.SRC, "keel")
 
 # stdlib modules keel uses (explicit allowlist → works on every Python version)
 STDLIB_OK = {
-    "ast", "dataclasses", "enum", "fnmatch", "importlib", "io", "json", "os",
-    "re", "shutil", "subprocess", "sys", "tempfile", "time", "typing", "contextlib",
+    "ast",
+    "dataclasses",
+    "enum",
+    "fnmatch",
+    "importlib",
+    "io",
+    "json",
+    "os",
+    "re",
+    "shutil",
+    "subprocess",
+    "sys",
+    "tempfile",
+    "time",
+    "typing",
+    "contextlib",
 }
 
 
@@ -24,7 +39,7 @@ def _top_level_imports(path):
             for n in node.names:
                 mods.add(n.name.split(".")[0])
         elif isinstance(node, ast.ImportFrom):
-            if node.level == 0 and node.module:        # absolute import
+            if node.level == 0 and node.module:  # absolute import
                 mods.add(node.module.split(".")[0])
     return mods
 

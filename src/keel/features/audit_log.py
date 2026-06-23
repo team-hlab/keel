@@ -36,5 +36,5 @@ class AuditLog(Feature):
             with open(path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(rec) + "\n")
         except OSError:
-            pass                          # logging must never block a tool call
-        return None                       # observer: no verdict
+            pass  # logging must never block a tool call
+        return None  # observer: no verdict

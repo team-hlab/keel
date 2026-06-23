@@ -29,12 +29,14 @@ class AutoPermit(Feature):
 
     def evaluate(self, event):
         if event.tool == "Bash":
-            decision = shell.decide_bash(event.command, event.cwd, event.root,
-                                         self.patterns, self.regexes, resolve_target)
+            decision = shell.decide_bash(
+                event.command, event.cwd, event.root, self.patterns, self.regexes, resolve_target
+            )
         else:
             abs_path = resolve_target(event.cwd, event.file_path)
-            decision = policy.decide(event.tool, event.file_path, abs_path, event.root,
-                                     self.patterns, self.regexes)
+            decision = policy.decide(
+                event.tool, event.file_path, abs_path, event.root, self.patterns, self.regexes
+            )
         if decision == PASS:
-            return None                      # abstain → let other features / platform decide
+            return None  # abstain → let other features / platform decide
         return Verdict(decision, _REASON[decision], self.name)
