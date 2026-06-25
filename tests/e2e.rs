@@ -461,3 +461,11 @@ fn audit_log_failure_does_not_break_verdict() {
     );
     fs::remove_dir_all(&root).ok();
 }
+
+#[test]
+fn cli_version() {
+    let o = run(&["version"], "", &[]);
+    assert_eq!(o.code, 0);
+    assert!(o.stdout.trim().starts_with("keel "), "{}", o.stdout);
+    assert!(o.stdout.contains(env!("CARGO_PKG_VERSION")));
+}

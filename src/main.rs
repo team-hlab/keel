@@ -25,7 +25,7 @@ usage:
   keel init                                     # attach keel to your installed agents
   keel apply | uninstall | doctor | status      # manage the install
   keel run <claude|codex|antigravity> <stage>   # hook entrypoint (used by the hooks)
-  keel features
+  keel features | version
 ";
 
 fn main() {
@@ -67,6 +67,10 @@ fn cli(args: &[String]) -> i32 {
         "apply" => shim::apply_all(),
         "uninstall" => shim::uninstall(),
         "doctor" | "status" => shim::doctor(),
+        "version" | "--version" | "-V" => {
+            println!("keel {}", env!("CARGO_PKG_VERSION"));
+            0
+        }
         _ => {
             eprint!("{USAGE}");
             2

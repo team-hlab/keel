@@ -1,15 +1,27 @@
 # Changelog
 
-All notable changes to this project are documented here. Format follows
-[Keep a Changelog](https://keepachangelog.com/); versions follow SemVer.
+All notable changes are documented here. Format: [Keep a Changelog](https://keepachangelog.com);
+versions follow [SemVer](https://semver.org). `Cargo.toml` is the single source of truth for
+the version — see [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+## [0.1.0] — 2026-06-25
+
 ### Added
-- Initial harness: platform-neutral `Event`/`Verdict` model, feature registry,
-  most-restrictive-wins aggregation engine.
+- **keel** as a single static Rust binary (~1 MB, zero runtime dependencies).
+- Core: platform-neutral `Event`/`Verdict` model, most-restrictive-wins engine
+  (`deny > ask > pass > allow`) with per-feature fail-open, runtime (root discovery,
+  config, realpath-style resolution).
 - Adapters: Claude Code (verified), OpenAI Codex and Google Antigravity (best-effort).
-- Features: `autopermit`, `branch-guard`, `secret-scan`, `audit-log`, `session-banner`.
-- `keel` CLI: `run <platform> <stage>`, `features`, `doctor`.
-- `bin/keel.sh` runtime-preflight shim (resolves Python, fails open).
-- Zero external runtime dependencies, enforced by a test.
+- Features: `autopermit` (files + full shell parsing), `branch-guard`, `secret-scan`,
+  `audit-log` (opt-in), `session-banner`.
+- Transparent **busybox shim** (`keel init`/`apply`/`uninstall`/`doctor`/`status`):
+  PATH-hijack symlinks, non-destructive `__keel` markers, `exec`s the real agent with
+  a fork-bomb guard.
+- CLI: `keel run <platform> <stage>`, `features`, `version`.
+- 40 tests (24 unit + 16 binary-level e2e), incl. edge-case & fault-tolerance.
+- CI (fmt/clippy/test + Python oracle); merge-triggered release workflow; Homebrew tap.
+
+[Unreleased]: https://github.com/team-hlab/keel/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/team-hlab/keel/releases/tag/v0.1.0
