@@ -31,18 +31,18 @@ brew upgrade keel         # update later
 This repo is mid-port from a verified Python implementation to Rust (the Python lives in `reference/python/` as the spec + test oracle, and is being retired).
 
 - ✅ **Hook engine** — `keel run <platform> <stage>`, the `autopermit` feature (files **and** full shell parsing), and Claude/Codex/Antigravity adapters. **Behavior verified 1:1 against the Python oracle.**
-- ✅ **Transparent shim** — `keel init` / `apply` / `uninstall` / `doctor`: PATH-hijack symlinks, non-destructive `__keel` markers, `exec`s the real agent. (16 Rust tests.)
-- 🚧 Remaining features (branch-guard, secret-scan, audit-log, session-banner) — in progress.
+- ✅ **Transparent shim** — `keel init` / `apply` / `uninstall` / `doctor`: PATH-hijack symlinks, non-destructive `__keel` markers, `exec`s the real agent.
+- ✅ **All five features** — autopermit, branch-guard, secret-scan, audit-log (opt-in), session-banner. **40 tests (24 unit + 16 binary-level e2e), incl. edge-case & fault-tolerance; clippy/fmt clean.**
 
 ## Features
 
 | Feature | Stage(s) | What it does |
 |---|---|---|
 | **autopermit** | PreToolUse, PermissionRequest | permit non-secret reads + worktree writes + safe shell; `ask` secrets; `deny` out-of-worktree writes & catastrophic commands |
-| branch-guard 🚧 | PreToolUse | `deny` mutating git on a protected branch |
-| secret-scan 🚧 | PreToolUse | `ask` when a write's content looks like a credential |
-| audit-log 🚧 | Pre/PostToolUse | append every call + verdict to JSONL |
-| session-banner 🚧 | SessionStart | announce active features |
+| **branch-guard** | PreToolUse | `deny` mutating git on a protected branch |
+| **secret-scan** | PreToolUse | `ask` when a write's content looks like a credential |
+| **audit-log** | PreToolUse | append every call to JSONL (opt-in — it writes files) |
+| **session-banner** | SessionStart | announce active features |
 
 Verdicts aggregate **most-restrictive-wins**: `deny > ask > pass > allow`. Tunable via `.keel.json`.
 

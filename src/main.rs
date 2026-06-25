@@ -58,8 +58,8 @@ fn cli(args: &[String]) -> i32 {
             0
         }
         "features" => {
-            for f in registry::load(&Value::Null) {
-                println!("{}", f.name());
+            for n in registry::NAMES {
+                println!("{n}");
             }
             0
         }

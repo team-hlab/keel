@@ -1,6 +1,10 @@
 //! The Feature contract: a self-contained policy or observer plugin.
 
+pub mod audit_log;
 pub mod autopermit;
+pub mod branch_guard;
+pub mod secret_scan;
+pub mod session_banner;
 
 use crate::model::{Event, Verdict};
 

@@ -6,6 +6,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::agent::{self, Agent, AGENTS};
+use crate::registry;
 
 pub fn keel_bin_dir() -> PathBuf {
     agent::home().join(".keel").join("bin")
@@ -137,6 +138,11 @@ pub fn uninstall() -> i32 {
 
 pub fn doctor() -> i32 {
     println!("keel {} ok", env!("CARGO_PKG_VERSION"));
+    let active: Vec<&str> = registry::load(&serde_json::Value::Null)
+        .iter()
+        .map(|f| f.name())
+        .collect();
+    println!("  features active (default): {}", active.join(", "));
     let bin_dir = keel_bin_dir();
     println!(
         "  shim dir {}: {}",
