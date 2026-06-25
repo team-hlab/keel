@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Target Architecture · Ports & Adapters</title>
+<style>
+  :root {
+    --bg:#1a1b26; --panel:#1f2335; --panel2:#24283b; --fg:#c0caf5; --muted:#565f89; --line:#2f344d;
+    --blue:#7aa2f7; --cyan:#7dcfff; --green:#9ece6a; --red:#f7768e; --orange:#ff9e64; --purple:#bb9af7; --yellow:#e0af68;
+    --mono:"D2Coding","MesloLGS NF",ui-monospace,"SF Mono",Menlo,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:radial-gradient(1200px 600px at 50% -10%,#1f2335 0%,var(--bg) 60%);
+       color:var(--fg);font-family:var(--sans);line-height:1.55;padding:48px 24px 80px;}
+  .wrap{max-width:1140px;margin:0 auto;}
+  .tag{font-family:var(--mono);font-size:12px;color:var(--cyan);}
+  h1{font-size:28px;margin:6px 0;letter-spacing:-0.3px;}
+  header p{color:var(--muted);margin:0 0 4px;}
+  h2{font-size:15px;text-transform:uppercase;letter-spacing:1.5px;color:var(--muted);margin:42px 0 16px;font-weight:600;}
+  code,.mono{font-family:var(--mono);}
+
+  /* hexagon diagram via 3-col grid */
+  .hex{display:grid;grid-template-columns:1fr 1.5fr 1fr;gap:0 18px;align-items:center;}
+  .side{display:flex;flex-direction:column;gap:12px;}
+  .adapter{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:11px 13px;}
+  .adapter .nm{font-size:14px;font-weight:600;}
+  .adapter .io{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:3px;}
+  .adapter.cc{border-left:3px solid var(--purple);}
+  .adapter.cx{border-left:3px solid var(--green);}
+  .adapter.ag{border-left:3px solid var(--blue);}
+  .arrows{display:flex;flex-direction:column;align-items:center;color:var(--muted);}
+
+  .core{background:var(--panel2);border:1px solid var(--cyan);border-radius:16px;padding:20px;text-align:center;
+        box-shadow:0 0 0 4px rgba(125,207,255,.06);}
+  .core .lbl{font-family:var(--mono);font-size:11px;color:var(--cyan);letter-spacing:1px;text-transform:uppercase;}
+  .core h3{margin:6px 0 10px;font-size:18px;}
+  .core .fn{font-family:var(--mono);font-size:13px;color:var(--fg);background:#1a1f2e;border:1px solid var(--line);
+            border-radius:9px;padding:9px 12px;display:inline-block;}
+  .core .rules{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;margin-top:12px;}
+  .core .r{font-family:var(--mono);font-size:11px;padding:3px 9px;border-radius:7px;border:1px solid var(--line);color:var(--muted);}
+  .core .pure{margin-top:11px;font-size:12px;color:var(--green);}
+  .colhead{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);text-align:center;margin-bottom:10px;}
+
+  .cfgband{margin:16px auto 0;max-width:62%;background:#16202a;border:1px dashed #2f4a52;border-radius:11px;
+           padding:10px 14px;text-align:center;font-size:12.5px;color:var(--cyan);}
+  .cfgband .mono{color:var(--cyan);}
+
+  /* contracts */
+  .pair{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+  .contract{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:15px 17px;}
+  .contract h4{margin:0 0 8px;font-size:14px;}
+  .contract pre{margin:0;font-family:var(--mono);font-size:12.5px;color:var(--fg);white-space:pre-wrap;line-height:1.5;}
+  .kw{color:var(--purple);} .cm{color:var(--muted);} .vl{color:var(--green);} .ty{color:var(--cyan);}
+
+  .insight{background:#1c2620;border:1px solid #2c3a2c;border-left:3px solid var(--green);border-radius:12px;padding:14px 18px;font-size:14px;margin-top:14px;}
+  .insight b{color:var(--green);}
+
+  /* layout tree */
+  .tree{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px;
+        font-family:var(--mono);font-size:13px;white-space:pre;overflow:auto;color:var(--fg);}
+  .tree .d{color:var(--blue);} .tree .c{color:var(--cyan);} .tree .g{color:var(--muted);} .tree .done{color:var(--green);} .tree .todo{color:var(--orange);}
+
+  /* verdict mapping */
+  table{width:100%;border-collapse:collapse;font-size:13.5px;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;}
+  th,td{text-align:left;padding:10px 13px;border-bottom:1px solid var(--line);}
+  th{background:var(--panel2);color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.5px;}
+  tr:last-child td{border-bottom:none;}
+  .v-allow{color:var(--green);font-weight:600;} .v-deny{color:var(--red);font-weight:600;}
+  .v-ask{color:var(--yellow);font-weight:600;} .v-pass{color:var(--muted);font-weight:600;}
+  td .mono{color:var(--cyan);font-size:12.5px;}
+
+  .rule{margin-top:16px;background:#2a2520;border:1px solid #4a3f2f;border-left:3px solid var(--yellow);border-radius:12px;padding:13px 17px;font-size:14px;}
+  .rule b{color:var(--yellow);}
+  footer{color:var(--muted);font-size:12px;margin-top:48px;text-align:center;}
+  @media(max-width:880px){.hex{grid-template-columns:1fr;}.pair{grid-template-columns:1fr;}.cfgband{max-width:100%;}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="tag">// target architecture · ports &amp; adapters (hexagonal)</div>
+    <h1>One policy core, three platform edges</h1>
+    <p>All variance lives in adapters. The decision is identical everywhere.</p>
+  </header>
+
+  <!-- ============ HEX DIAGRAM ============ -->
+  <h2>The shape</h2>
+  <div class="hex">
+    <div class="side">
+      <div class="colhead">inbound adapters</div>
+      <div class="adapter cc"><div class="nm">Claude Code</div><div class="io">{tool_name, tool_input.file_path}</div></div>
+      <div class="adapter cx"><div class="nm">Codex</div><div class="io">apply_patch / shell · stdin JSON</div></div>
+      <div class="adapter ag"><div class="nm">Antigravity</div><div class="io">{toolCall.args, workspacePaths}</div></div>
+    </div>
+
+    <div>
+      <div class="arrows">normalize&nbsp;→&nbsp;ToolRequest&nbsp;↓</div>
+      <div class="core">
+        <div class="lbl">core · pure · no I/O</div>
+        <h3>decide(ToolRequest) → Verdict</h3>
+        <div class="fn">secret? · in worktree? · in project? · external?</div>
+        <div class="rules">
+          <span class="r">READ → allow</span><span class="r">secret → ask</span>
+          <span class="r">worktree write → allow</span><span class="r">in-proj write → deny</span>
+          <span class="r">external → pass</span>
+        </div>
+        <div class="pure">↺ ports verbatim to every platform</div>
+      </div>
+      <div class="arrows" style="margin-top:8px">↓&nbsp;Verdict&nbsp;→&nbsp;render</div>
+      <div class="cfgband">reads one config → <span class="mono">autopermit.toml</span><br>sensitive globs · writable roots · capability map</div>
+    </div>
+
+    <div class="side">
+      <div class="colhead">outbound adapters</div>
+      <div class="adapter cc"><div class="nm">Claude Code</div><div class="io">hookSpecificOutput.permissionDecision</div></div>
+      <div class="adapter cx"><div class="nm">Codex</div><div class="io">permissionDecision: allow|deny</div></div>
+      <div class="adapter ag"><div class="nm">Antigravity</div><div class="io">{decision: allow|deny|ask}</div></div>
+    </div>
+  </div>
+
+  <div class="insight">
+    <b>The key abstraction:</b> adapters normalize each platform's raw tool names into <em>capability categories</em>
+    (<span class="mono">READ / WRITE / OTHER</span>) — so the core reasons about "a file write", never about
+    <span class="mono">apply_patch</span> vs <span class="mono">Edit</span> vs Antigravity's names. That is what lets one policy serve three agents.
+  </div>
+
+  <!-- ============ CONTRACTS ============ -->
+  <h2>The only two contracts the core knows</h2>
+  <div class="pair">
+    <div class="contract">
+      <h4>ToolRequest <span class="cm" style="font-weight:400">(in)</span></h4>
+<pre><span class="kw">capability</span>: <span class="ty">READ | WRITE | OTHER</span>   <span class="cm"># normalized</span>
+<span class="kw">path</span>:       <span class="ty">str</span>   <span class="cm"># abs, realpath'd</span>
+<span class="kw">raw_name</span>:   <span class="ty">str</span>   <span class="cm"># for secret basename</span>
+<span class="kw">stage</span>:      <span class="ty">PRE | PERMISSION</span></pre>
+    </div>
+    <div class="contract">
+      <h4>Verdict <span class="cm" style="font-weight:400">(out)</span></h4>
+<pre><span class="kw">decision</span>: <span class="vl">ALLOW | DENY | ASK | PASS</span>
+<span class="kw">reason</span>:   <span class="ty">str</span>
+
+<span class="cm"># each outbound adapter renders</span>
+<span class="cm"># this to its native schema</span></pre>
+    </div>
+  </div>
+
+  <!-- ============ VERDICT MAPPING ============ -->
+  <h2>Verdict → native output</h2>
+  <table>
+    <thead><tr><th>core Verdict</th><th>Claude Code</th><th>Codex</th><th>Antigravity</th></tr></thead>
+    <tbody>
+      <tr><td class="v-allow">ALLOW</td><td class="mono">permissionDecision:"allow"</td><td class="mono">"allow"</td><td class="mono">{decision:"allow"}</td></tr>
+      <tr><td class="v-deny">DENY</td><td class="mono">"deny"</td><td class="mono">"deny"</td><td class="mono">{decision:"deny"}</td></tr>
+      <tr><td class="v-ask">ASK</td><td class="mono">"ask"</td><td class="mono">"ask"*</td><td class="mono">{decision:"ask"}</td></tr>
+      <tr><td class="v-pass">PASS</td><td class="mono">{continue:true}</td><td class="mono">(no decision)</td><td class="mono">(no decision)</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ============ LAYOUT ============ -->
+  <h2>Layout</h2>
+  <div class="tree"><span class="d">autopermit/</span>
+├─ <span class="d">core/</span>            <span class="g"># pure · platform-agnostic · the brain</span>
+│  ├─ model.py     <span class="g">ToolRequest · Verdict · Decision</span>
+│  ├─ <span class="c">policy.py</span>    <span class="done">decide(req, cfg) → Verdict   ← ports verbatim</span>
+│  ├─ paths.py     <span class="g">root · worktree · secret detection</span>
+│  └─ config.py    <span class="g">load autopermit.toml</span>
+├─ <span class="d">adapters/</span>        <span class="g"># all platform variance lives here</span>
+│  ├─ claude_code.py    <span class="done">✓ done (PreToolUse + PermissionRequest)</span>
+│  ├─ codex.py          <span class="todo">+ to add</span>
+│  └─ antigravity.py    <span class="todo">+ to add (verify schema live)</span>
+├─ <span class="d">config/</span>
+│  └─ <span class="c">autopermit.toml</span>  <span class="g"># ONE source of truth</span>
+├─ <span class="d">registrations/</span>   <span class="g"># snippet each platform pastes in</span>
+└─ <span class="d">tests/</span> test_policy.py</div>
+
+  <div class="rule">
+    <b>Cross-cutting rule.</b> Read-only tools don't prompt on <em>any</em> platform — so secret-read confirmation must be
+    emitted at the <b>always-runs pre-tool stage</b> as <span class="v-ask">ASK</span>. Therefore the PreToolUse-equivalent
+    adapter is <b>mandatory</b> and load-bearing; the PermissionRequest-equivalent is an <b>optional</b> secondary layer
+    that reuses the same <span class="mono">Verdict</span>, so the two stages can never disagree.
+  </div>
+
+  <footer>Companion to autopermit-architecture.html (Claude deep-dive) &amp; autopermit-platforms.html (three-way comparison)</footer>
+</div>
+</body>
+</html>

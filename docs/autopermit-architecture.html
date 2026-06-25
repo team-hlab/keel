@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Auto-Permission Hook · Architecture</title>
+<style>
+  :root {
+    --bg: #1a1b26; --bg2: #16161e; --panel: #1f2335; --panel2: #24283b;
+    --fg: #c0caf5; --muted: #565f89; --line: #2f344d;
+    --blue: #7aa2f7; --cyan: #7dcfff; --green: #9ece6a; --red: #f7768e;
+    --orange: #ff9e64; --purple: #bb9af7; --yellow: #e0af68;
+    --mono: "D2Coding", "MesloLGS NF", ui-monospace, "SF Mono", Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: radial-gradient(1200px 600px at 50% -10%, #1f2335 0%, var(--bg) 60%);
+    color: var(--fg); font-family: var(--sans); line-height: 1.55;
+    padding: 48px 24px 80px;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; }
+  header h1 { font-size: 28px; margin: 0 0 6px; letter-spacing: -0.3px; }
+  header p { color: var(--muted); margin: 0 0 4px; }
+  .tag { font-family: var(--mono); font-size: 12px; color: var(--cyan); }
+  h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 1.5px;
+       color: var(--muted); margin: 44px 0 16px; font-weight: 600; }
+  code, .mono { font-family: var(--mono); }
+
+  /* ---- pipeline ---- */
+  .pipe { display: grid; grid-template-columns: 1fr; gap: 0; }
+  .stage {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    padding: 18px 20px; position: relative;
+  }
+  .stage + .arrow { justify-self: center; color: var(--muted); font-size: 22px; padding: 6px 0; }
+  .stage .stage-h { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+  .stage .badge {
+    font-family: var(--mono); font-size: 11px; padding: 2px 8px; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--muted);
+  }
+  .stage h3 { margin: 0; font-size: 17px; }
+  .stage .sub { color: var(--muted); font-size: 13px; margin: 2px 0 14px; }
+  .stage.ptu { border-left: 3px solid var(--orange); }
+  .stage.perm { border-left: 3px solid var(--purple); }
+  .stage.core { border-left: 3px solid var(--cyan); background: var(--panel2); }
+  .stage.term { border-left: 3px solid var(--green); }
+
+  .decisions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .pill { font-family: var(--mono); font-size: 12px; padding: 5px 11px; border-radius: 8px;
+          border: 1px solid var(--line); display: inline-flex; gap: 7px; align-items: center; }
+  .pill b { font-weight: 600; }
+  .allow { color: var(--green); border-color: #2c3a2c; background: #1c2620; }
+  .deny  { color: var(--red);  border-color: #3a2c30; background: #261c20; }
+  .ask   { color: var(--yellow); border-color: #3a352c; background: #26231c; }
+  .pass  { color: var(--muted); }
+
+  /* ---- core link ---- */
+  .corewrap { display: grid; grid-template-columns: 1fr; gap: 14px; }
+  .feeds { color: var(--muted); font-size: 13px; text-align: center; }
+  .feeds .mono { color: var(--cyan); }
+
+  /* ---- table ---- */
+  table { width: 100%; border-collapse: collapse; font-size: 14px; margin-top: 4px;
+          background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--line); }
+  th { background: var(--panel2); color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.6px; }
+  tr:last-child td { border-bottom: none; }
+  td .mono { font-size: 13px; color: var(--cyan); }
+  .v-allow { color: var(--green); font-weight: 600; }
+  .v-deny  { color: var(--red); font-weight: 600; }
+  .v-ask   { color: var(--yellow); font-weight: 600; }
+  .v-pass  { color: var(--muted); font-weight: 600; }
+
+  /* ---- files ---- */
+  .files { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+  .file { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+  .file .fn { font-family: var(--mono); font-size: 13px; color: var(--blue); }
+  .file .fd { color: var(--muted); font-size: 13px; margin-top: 5px; }
+  .file.pure { border-top: 3px solid var(--cyan); }
+
+  .note {
+    margin-top: 16px; background: #2a1f1f; border: 1px solid #4a2f33; border-left: 3px solid var(--red);
+    border-radius: 12px; padding: 14px 18px; font-size: 14px;
+  }
+  .note b { color: var(--orange); }
+  footer { color: var(--muted); font-size: 12px; margin-top: 48px; text-align: center; }
+  .legend { display:flex; gap:14px; flex-wrap:wrap; margin-top:10px; font-size:12px; color:var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="tag">// hook architecture</div>
+    <h1>Auto-Permission for Read / Write tools</h1>
+    <p>Two hook stages, one shared decision core. Auto-allow the safe, confirm the sensitive, block the protected.</p>
+    <p class="tag">stdlib-only · no third-party deps · runtime-agnostic policy</p>
+  </header>
+
+  <!-- ============ PIPELINE ============ -->
+  <h2>Request lifecycle</h2>
+  <div class="pipe">
+    <div class="stage">
+      <div class="stage-h"><h3>Tool call</h3><span class="badge">agent</span></div>
+      <div class="sub mono">Read · Glob · Grep · Edit · Write · NotebookEdit …</div>
+    </div>
+    <div class="arrow">↓</div>
+
+    <div class="stage ptu">
+      <div class="stage-h"><h3>PreToolUse hook</h3><span class="badge">runs always · pre-permission</span></div>
+      <div class="sub">Hard guarantees. Runs before the permission system, so its verdict is reliable.</div>
+      <div class="decisions">
+        <span class="pill allow"><b>allow</b> normal read · worktree write → skip prompt</span>
+        <span class="pill ask"><b>ask</b> secret file → force a confirmation prompt</span>
+        <span class="pill deny"><b>deny</b> write outside worktree → block</span>
+        <span class="pill pass"><b>pass</b> emit no decision → defer to next stage</span>
+      </div>
+      <div class="sub" style="margin:12px 0 0">Read-only tools (Read/Glob/Grep) are auto-allowed with no prompt — so secret-<em>read</em> gating must happen here via <span class="mono">ask</span>, not downstream. Valid values: <span class="mono">allow · deny · ask · defer</span> (defer = headless <span class="mono">-p</span> only).</div>
+    </div>
+    <div class="arrow">↓ <span class="mono" style="font-size:12px">(allow ⇒ skip prompt · deny ⇒ block · ask ⇒ prompt · precedence: deny &gt; ask &gt; allow)</span></div>
+
+    <div class="stage">
+      <div class="stage-h"><h3>Permission system</h3><span class="badge">settings rules</span></div>
+      <div class="sub">allow / deny / ask lists. If it would prompt → the PermissionRequest hook fires.</div>
+    </div>
+    <div class="arrow">↓</div>
+
+    <div class="stage perm">
+      <div class="stage-h"><h3>PermissionRequest hook</h3><span class="badge">fires only when a dialog would appear</span></div>
+      <div class="sub">Auto-allow layer. Re-derives the <em>same</em> decision, so it never overrides a needed confirmation.</div>
+      <div class="decisions">
+        <span class="pill allow"><b>allow</b> auto-approve safe calls</span>
+        <span class="pill deny"><b>deny</b> block protected writes</span>
+        <span class="pill pass"><b>(no decision)</b> secret / external → real user prompt</span>
+      </div>
+      <div class="sub" style="margin:12px 0 0"><span class="mono">decision.behavior</span> is <b>allow</b> or <b>deny</b> only — there is no <span class="mono">pass</span> value; you "pass" by emitting no decision. Does <b>not</b> fire for default-allowed read-only tools, nor in headless <span class="mono">-p</span> mode (use PreToolUse there).</div>
+    </div>
+    <div class="arrow">↓</div>
+
+    <div class="stage term">
+      <div class="stage-h"><h3>Outcome</h3><span class="badge">execute · confirm · block</span></div>
+      <div class="sub">Safe → runs silently. Sensitive → user confirms. Protected → denied.</div>
+    </div>
+  </div>
+
+  <!-- ============ SHARED CORE ============ -->
+  <h2>Single source of truth</h2>
+  <div class="corewrap">
+    <div class="feeds">PreToolUse &nbsp;↘ &nbsp;&nbsp; <span class="mono">policy.decide(tool, path, root) → allow | deny | ask | pass</span> &nbsp;&nbsp; ↙&nbsp; PermissionRequest</div>
+    <div class="stage core">
+      <div class="stage-h"><h3 class="mono">decide()</h3><span class="badge">pure · no I/O</span></div>
+      <div class="sub">Both entrypoints call one pure function. The two stages can never disagree, because they compute the same verdict from the same inputs.</div>
+      <div class="legend">
+        <span>READ_TOOLS → allow, unless secret → ask</span>
+        <span>WRITE_TOOLS → worktree allow · secret ask · in-project deny · external pass</span>
+        <span>other → pass</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ DECISION TABLE ============ -->
+  <h2>Decision matrix</h2>
+  <table>
+    <thead><tr><th>Tool</th><th>Target</th><th>Verdict</th><th>Effect</th></tr></thead>
+    <tbody>
+      <tr><td>Read · Glob · Grep</td><td>any normal file</td><td class="v-allow">allow</td><td>runs, no prompt</td></tr>
+      <tr><td>Read</td><td class="mono">.env* · *.key · *.pem · *secret*</td><td class="v-ask">ask</td><td>require confirmation</td></tr>
+      <tr><td>Edit · Write</td><td>inside <span class="mono">worktrees/</span></td><td class="v-allow">allow</td><td>runs, no prompt</td></tr>
+      <tr><td>Edit · Write</td><td>a secret file (even in worktree)</td><td class="v-ask">ask</td><td>require confirmation</td></tr>
+      <tr><td>Edit · Write</td><td>protected dir (e.g. <span class="mono">main/</span>)</td><td class="v-deny">deny</td><td>blocked — read-only</td></tr>
+      <tr><td>Edit · Write</td><td>outside the project root</td><td class="v-pass">pass</td><td>defer to settings / user</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ============ FILE LAYOUT ============ -->
+  <h2>Code structure</h2>
+  <div class="files">
+    <div class="file pure"><div class="fn">policy.py</div><div class="fd">Pure decision logic. No filesystem, no stdin/stdout. The unit-test surface.</div></div>
+    <div class="file"><div class="fn">context.py</div><div class="fd">I/O edges: project-root discovery, config loading, path normalization (realpath).</div></div>
+    <div class="file"><div class="fn">hookio.py</div><div class="fd">stdin parse + stage-specific response emitters (PreToolUse vs PermissionRequest schemas).</div></div>
+    <div class="file"><div class="fn">pre_tool_use.py</div><div class="fd">PreToolUse entrypoint → allow / deny / ask. The reliable guarantees.</div></div>
+    <div class="file"><div class="fn">permission_request.py</div><div class="fd">PermissionRequest entrypoint → allow / deny / pass. The auto-allow layer.</div></div>
+    <div class="file"><div class="fn">test_policy.py</div><div class="fd">stdlib unittest against the pure core. Runs with zero deps.</div></div>
+  </div>
+
+  <div class="note">
+    <b>The short-circuit pitfall.</b> A <span class="mono">PermissionRequest</span> hook only fires when a prompt
+    is about to appear. If an earlier <span class="mono">PreToolUse</span> hook <span class="v-allow">allow</span>s the call,
+    the permission flow is skipped entirely — so any secret-gating logic placed only in PermissionRequest becomes dead code.
+    Force-confirm (<span class="v-ask">ask</span>) and hard-block (<span class="v-deny">deny</span>) must live in
+    <span class="mono">PreToolUse</span>; let PermissionRequest re-derive the <em>same</em> verdict so the two layers stay consistent.
+  </div>
+
+  <div class="note" style="background:#1f2330;border-color:#2f3a4a;border-left-color:var(--blue);margin-top:24px">
+    <b style="color:var(--blue)">Platform scope.</b> The field names &amp; output schema below are <b>Claude Code</b>'s
+    (verified vs <span class="mono">code.claude.com/docs</span>). But the <em>shape</em> — a pre-run hook returning
+    <span class="mono">allow/deny/ask</span> — now also exists in <b>OpenAI Codex</b> (<span class="mono">PreToolUse</span>/<span class="mono">PermissionRequest</span>,
+    <span class="mono">hooks.json</span>) and <b>Google Antigravity 2.0</b> (<span class="mono">PreToolUse</span>, <span class="mono">.agents/hooks.json</span>),
+    both shipped ~May 2026. So the pure <span class="mono">decide()</span> core ports across all three — only the I/O adapter changes.
+    See <span class="mono">autopermit-platforms.html</span> for the side-by-side.
+  </div>
+
+  <footer>Self-contained reference · adapt the tool sets, secret globs, and writable paths to your own project.</footer>
+</div>
+</body>
+</html>

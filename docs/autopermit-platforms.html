@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Hook & Permission Models · Claude Code · Codex · Antigravity</title>
+<style>
+  :root {
+    --bg: #1a1b26; --panel: #1f2335; --panel2: #24283b;
+    --fg: #c0caf5; --muted: #565f89; --line: #2f344d;
+    --blue: #7aa2f7; --cyan: #7dcfff; --green: #9ece6a; --red: #f7768e;
+    --orange: #ff9e64; --purple: #bb9af7; --yellow: #e0af68;
+    --mono: "D2Coding","MesloLGS NF",ui-monospace,"SF Mono",Menlo,monospace;
+    --sans: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background: radial-gradient(1200px 600px at 50% -10%, #1f2335 0%, var(--bg) 60%);
+         color: var(--fg); font-family: var(--sans); line-height: 1.55; padding: 48px 24px 80px; }
+  .wrap { max-width: 1180px; margin: 0 auto; }
+  .tag { font-family: var(--mono); font-size: 12px; color: var(--cyan); }
+  h1 { font-size: 28px; margin: 6px 0; letter-spacing: -0.3px; }
+  header p { color: var(--muted); margin: 0 0 4px; }
+  h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 1.5px; color: var(--muted);
+       margin: 44px 0 16px; font-weight: 600; }
+  code,.mono { font-family: var(--mono); }
+
+  .callout { background:#1c2620; border:1px solid #2c3a2c; border-left:3px solid var(--green);
+             border-radius:12px; padding:14px 18px; font-size:14px; }
+  .callout b { color: var(--green); }
+
+  /* three columns */
+  .cols { display:grid; grid-template-columns: repeat(3,1fr); gap:14px; }
+  .col { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px 18px; }
+  .col.cc { border-top:3px solid var(--purple); }
+  .col.cx { border-top:3px solid var(--green); }
+  .col.ag { border-top:3px solid var(--blue); }
+  .col h3 { margin:0 0 2px; font-size:17px; }
+  .col .meta { font-size:12px; color:var(--muted); margin-bottom:12px; }
+  .col ul { margin:0; padding-left:18px; font-size:13px; }
+  .col li { margin-bottom:7px; }
+  .col .k { color:var(--muted); }
+  .conf { font-family:var(--mono); font-size:11px; padding:2px 8px; border-radius:999px; border:1px solid var(--line); }
+  .hi { color:var(--green); border-color:#2c3a2c; }
+  .med { color:var(--yellow); border-color:#3a352c; }
+
+  table { width:100%; border-collapse:collapse; font-size:13.5px; margin-top:4px;
+          background:var(--panel); border:1px solid var(--line); border-radius:12px; overflow:hidden; }
+  th,td { text-align:left; padding:10px 13px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { background:var(--panel2); color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.5px; }
+  td:first-child { color:var(--muted); white-space:nowrap; }
+  tr:last-child td { border-bottom:none; }
+  .mono.cy { color:var(--cyan); }
+  .yes { color:var(--green); } .no { color:var(--red); } .partial { color:var(--yellow); }
+
+  .build { display:grid; grid-template-columns: 1.1fr 1fr 1fr; gap:14px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:15px 17px; }
+  .card.core { border-left:3px solid var(--cyan); background:var(--panel2); }
+  .card h4 { margin:0 0 8px; font-size:15px; }
+  .card .fn { font-family:var(--mono); font-size:12.5px; color:var(--blue); }
+  .card p { font-size:13px; color:var(--muted); margin:6px 0 0; }
+  .status { font-family:var(--mono); font-size:11px; padding:2px 8px; border-radius:999px; }
+  .done { color:var(--green); border:1px solid #2c3a2c; }
+  .todo { color:var(--orange); border:1px solid #3a312c; }
+
+  .note { margin-top:18px; background:#2a2520; border:1px solid #4a3f2f; border-left:3px solid var(--yellow);
+          border-radius:12px; padding:13px 17px; font-size:13.5px; }
+  .note b { color:var(--yellow); }
+  footer { color:var(--muted); font-size:12px; margin-top:48px; text-align:center; }
+  @media (max-width: 880px){ .cols,.build{ grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="tag">// hooks &amp; permissions · cross-platform · as of 2026-06</div>
+    <h1>Claude Code · Codex · Antigravity</h1>
+    <p>One auto-permission policy, three agent platforms. They converged on the same shape.</p>
+  </header>
+
+  <div class="callout">
+    <b>The convergence.</b> All three now expose a lifecycle hook that fires <em>before a tool runs</em> and returns an
+    <span class="mono">allow / deny / ask</span> verdict over JSON on stdin→stdout. The old belief that
+    "only Claude Code has PreToolUse-style hooks" was true before ~May 2026 and is now outdated — Codex and Antigravity
+    shipped equivalents. <b>So the decision logic is portable; only the I/O adapter and registration differ.</b>
+  </div>
+
+  <!-- per-platform cards -->
+  <h2>Per platform</h2>
+  <div class="cols">
+    <div class="col cc">
+      <h3>Claude Code</h3>
+      <div class="meta">Anthropic · <span class="conf hi">confidence: high</span></div>
+      <ul>
+        <li><span class="k">Gating hooks:</span> <span class="mono">PreToolUse</span>, <span class="mono">PermissionRequest</span></li>
+        <li><span class="k">Decisions:</span> <span class="mono">allow / deny / ask / defer</span></li>
+        <li><span class="k">Register:</span> <span class="mono">.claude/settings.json</span> → <span class="mono">hooks</span></li>
+        <li><span class="k">I/O:</span> stdin <span class="mono">{tool_name, tool_input}</span> → stdout <span class="mono">hookSpecificOutput</span></li>
+        <li><span class="k">Declarative alt:</span> settings <span class="mono">permissions</span> allow/deny/ask + built-in read-only safelist</li>
+        <li><span class="k">Caveat:</span> <span class="mono">PermissionRequest</span> doesn't fire in headless <span class="mono">-p</span>, nor for default-allowed reads — use PreToolUse</li>
+      </ul>
+    </div>
+    <div class="col cx">
+      <h3>OpenAI Codex</h3>
+      <div class="meta">shipped ~May 2026 · <span class="conf hi">confidence: high</span></div>
+      <ul>
+        <li><span class="k">Gating hooks:</span> <span class="mono">PreToolUse</span>, <span class="mono">PermissionRequest</span>, <span class="mono">PostToolUse</span>, SessionStart, Stop…</li>
+        <li><span class="k">Decisions:</span> <span class="mono">permissionDecision: allow/deny</span> (block-capable)</li>
+        <li><span class="k">Register:</span> <span class="mono">.codex/hooks.json</span> or <span class="mono">[hooks]</span> in <span class="mono">config.toml</span> (gate <span class="mono">features.hooks</span>)</li>
+        <li><span class="k">I/O:</span> stdin JSON → stdout <span class="mono">permissionDecision</span> <em>(command handlers only, today)</em></li>
+        <li><span class="k">Declarative alt:</span> <span class="mono">execpolicy</span> Starlark <span class="mono">.rules</span> → <span class="mono">allow/prompt/forbidden</span>; + <span class="mono">approval_policy</span> + <span class="mono">sandbox_mode</span></li>
+        <li><span class="k">Notifier:</span> <span class="mono">notify</span> = observe-only (<span class="mono">agent-turn-complete</span>)</li>
+      </ul>
+    </div>
+    <div class="col ag">
+      <h3>Google Antigravity</h3>
+      <div class="meta">2.0, ~May 2026 · <span class="conf med">confidence: medium</span></div>
+      <ul>
+        <li><span class="k">Gating hooks:</span> <span class="mono">PreToolUse</span>, <span class="mono">PostToolUse</span>, <span class="mono">Pre/PostInvocation</span>, <span class="mono">Stop</span></li>
+        <li><span class="k">Decisions:</span> <span class="mono">{decision: allow/deny/ask}</span></li>
+        <li><span class="k">Register:</span> <span class="mono">.agents/hooks.json</span> or <span class="mono">~/.gemini/config/hooks.json</span></li>
+        <li><span class="k">I/O:</span> stdin <span class="mono">{toolCall.args, workspacePaths, transcriptPath}</span> → stdout <span class="mono">{decision,reason}</span></li>
+        <li><span class="k">Declarative alt:</span> Terminal Execution Policy (Off/Auto/Turbo) + Allow/Deny lists; Review Policy; browser allowlist</li>
+        <li><span class="k">⚠ verify:</span> official docs are JS-rendered/unread; field names &amp; SDK hook taxonomy from secondary sources — confirm live</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- comparison matrix -->
+  <h2>Side by side</h2>
+  <table>
+    <thead><tr><th>&nbsp;</th><th>Claude Code</th><th>Codex</th><th>Antigravity</th></tr></thead>
+    <tbody>
+      <tr><td>Pre-run gating hook</td><td class="yes">✓ PreToolUse</td><td class="yes">✓ PreToolUse</td><td class="yes">✓ PreToolUse</td></tr>
+      <tr><td>Dedicated permission hook</td><td class="yes">✓ PermissionRequest</td><td class="yes">✓ PermissionRequest</td><td class="partial">~ via PreToolUse</td></tr>
+      <tr><td>Verdict vocabulary</td><td><span class="mono cy">allow/deny/ask/defer</span></td><td><span class="mono cy">allow/deny</span></td><td><span class="mono cy">allow/deny/ask</span></td></tr>
+      <tr><td>Config file</td><td><span class="mono cy">settings.json</span></td><td><span class="mono cy">hooks.json / config.toml</span></td><td><span class="mono cy">.agents/hooks.json</span></td></tr>
+      <tr><td>Declarative rule engine</td><td class="partial">permissions lists</td><td class="yes">execpolicy (Starlark)</td><td class="partial">Allow/Deny lists (UI)</td></tr>
+      <tr><td>OS sandbox</td><td class="partial">permission modes</td><td class="yes">Seatbelt/bwrap/seccomp</td><td class="partial">classifier-based</td></tr>
+      <tr><td>Reads auto-allowed (no prompt)</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+      <tr><td>Observe-only turn notifier</td><td>Notification hook</td><td><span class="mono cy">notify</span></td><td>Walkthrough/artifacts</td></tr>
+      <tr><td>Doc confidence</td><td class="yes">high</td><td class="yes">high</td><td class="partial">medium (verify)</td></tr>
+    </tbody>
+  </table>
+
+  <!-- what to build -->
+  <h2>What we have to build</h2>
+  <div class="build">
+    <div class="card core">
+      <h4>① Shared policy core <span class="status done">write once</span></h4>
+      <div class="fn">policy.decide(tool, path, root) → allow|deny|ask|pass</div>
+      <p>Pure, no I/O. Read→allow (secret→ask) · worktree write→allow · in-project write→deny · external→pass. Ports verbatim to every platform — this is the whole brain.</p>
+    </div>
+    <div class="card">
+      <h4>② Claude Code adapter <span class="status done">done</span></h4>
+      <div class="fn">pre_tool_use.py · permission_request.py</div>
+      <p>Parse <span class="mono">tool_input.file_path</span> → emit <span class="mono">hookSpecificOutput.permissionDecision</span>. Registered in settings.json. Tested 14/14.</p>
+    </div>
+    <div class="card">
+      <h4>③ Codex adapter <span class="status todo">to add</span></h4>
+      <div class="fn">.codex/hooks.json + emit permissionDecision</div>
+      <p>Same <span class="mono">decide()</span>; map output to Codex's <span class="mono">permissionDecision</span>. Optionally re-express as execpolicy <span class="mono">.rules</span> for a config-only variant.</p>
+    </div>
+    <div class="card">
+      <h4>④ Antigravity adapter <span class="status todo">to add</span></h4>
+      <div class="fn">.agents/hooks.json + emit {decision}</div>
+      <p>Same <span class="mono">decide()</span>; map input from <span class="mono">toolCall.args</span>, output to <span class="mono">{decision: allow|deny|ask}</span>. <b>Confirm field names in a live session first.</b></p>
+    </div>
+  </div>
+
+  <div class="note">
+    <b>Reality check on Antigravity.</b> Its official docs render client-side and weren't machine-readable during research, so
+    the hook file paths, exact input field names, and the richer SDK hook taxonomy come from secondary sources and an
+    <em>unverified</em> GitHub org. Treat the Antigravity column as a strong lead, not gospel — verify against
+    <span class="mono">*.google.com</span> before wiring automation.
+  </div>
+
+  <footer>Companion to autopermit-architecture.html · verified vs code.claude.com/docs &amp; developers.openai.com/codex · Antigravity from secondary sources</footer>
+</div>
+</body>
+</html>

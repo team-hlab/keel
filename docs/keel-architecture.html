@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>keel · Architecture</title>
+<style>
+  :root {
+    --bg:#1a1b26; --panel:#1f2335; --panel2:#24283b; --fg:#c0caf5; --muted:#565f89; --line:#2f344d;
+    --blue:#7aa2f7; --cyan:#7dcfff; --green:#9ece6a; --red:#f7768e; --orange:#ff9e64; --purple:#bb9af7; --yellow:#e0af68;
+    --mono:"D2Coding","MesloLGS NF",ui-monospace,"SF Mono",Menlo,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:radial-gradient(1200px 620px at 50% -10%,#1f2335 0%,var(--bg) 60%);
+       color:var(--fg);font-family:var(--sans);line-height:1.55;padding:46px 24px 90px;}
+  .wrap{max-width:1180px;margin:0 auto;}
+  .tag{font-family:var(--mono);font-size:12px;color:var(--cyan);}
+  h1{font-size:30px;margin:6px 0 2px;letter-spacing:-0.5px;}
+  .sub{font-size:15px;margin:0 0 2px;font-weight:600;}
+  header p{color:var(--muted);margin:2px 0;}
+  h2{font-size:14px;text-transform:uppercase;letter-spacing:1.6px;color:var(--muted);margin:44px 0 16px;font-weight:600;}
+  h2 .hint{text-transform:none;letter-spacing:0;color:var(--muted);font-weight:400;font-size:12px;}
+  code,.mono{font-family:var(--mono);}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;}
+  .chip{font-family:var(--mono);font-size:11.5px;padding:4px 10px;border-radius:999px;border:1px solid var(--line);color:var(--muted);}
+  .chip b{color:var(--cyan);font-weight:600;}
+
+  /* interception stepper */
+  .flowwrap{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 18px 8px;}
+  .steps{display:flex;align-items:stretch;gap:0;flex-wrap:wrap;}
+  .step{flex:1 1 0;min-width:150px;background:var(--panel2);border:1px solid var(--line);border-radius:11px;padding:11px 12px;margin:4px;}
+  .step .n{font-family:var(--mono);font-size:10px;color:var(--cyan);}
+  .step .t{font-size:13px;font-weight:600;margin:3px 0;}
+  .step .d{font-size:11.5px;color:var(--muted);}
+  .step .d .mono{color:var(--cyan);font-size:11px;}
+  .step.keel{border-color:var(--cyan);box-shadow:0 0 0 3px rgba(125,207,255,.06);}
+  .arrow{align-self:center;color:var(--muted);font-family:var(--mono);font-size:16px;padding:0 2px;}
+  .outcomes{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:12px;}
+  .oc{border:1px solid var(--line);border-radius:9px;padding:9px 11px;font-size:12px;}
+  .oc .k{font-family:var(--mono);font-weight:700;font-size:12px;}
+  .oc.allow{border-left:3px solid var(--green);} .oc.allow .k{color:var(--green);}
+  .oc.deny{border-left:3px solid var(--red);} .oc.deny .k{color:var(--red);}
+  .oc.ask{border-left:3px solid var(--yellow);} .oc.ask .k{color:var(--yellow);}
+  .oc.pass{border-left:3px solid var(--muted);} .oc.pass .k{color:var(--muted);}
+  .oc .d{color:var(--muted);margin-top:2px;}
+
+  /* hexagon */
+  .hex{display:grid;grid-template-columns:1fr 1.6fr 1fr;gap:0 18px;align-items:center;}
+  .side{display:flex;flex-direction:column;gap:11px;}
+  .colhead{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);text-align:center;margin-bottom:8px;}
+  .adapter{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:11px 13px;}
+  .adapter .nm{font-size:14px;font-weight:600;}
+  .adapter .io{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:3px;}
+  .adapter.cc{border-left:3px solid var(--purple);}
+  .adapter.cx{border-left:3px solid var(--green);}
+  .adapter.ag{border-left:3px solid var(--blue);}
+  .arrows{display:flex;justify-content:center;color:var(--muted);font-family:var(--mono);font-size:12px;padding:6px 0;}
+  .core{background:var(--panel2);border:1px solid var(--cyan);border-radius:16px;padding:16px;text-align:center;box-shadow:0 0 0 4px rgba(125,207,255,.06);}
+  .core .lbl{font-family:var(--mono);font-size:11px;color:var(--cyan);letter-spacing:1px;text-transform:uppercase;}
+  .core h3{margin:6px 0 4px;font-size:16px;}
+  .core .flow{font-family:var(--mono);font-size:11.5px;background:#1a1f2e;border:1px solid var(--line);border-radius:9px;padding:8px 9px;margin:8px 0 0;}
+
+  /* per-agent wiring */
+  .agents{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;}
+  .ag{background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:16px;display:flex;flex-direction:column;gap:10px;}
+  .ag.claude{border-top:3px solid var(--purple);}
+  .ag.codex{border-top:3px solid var(--green);}
+  .ag.anti{border-top:3px solid var(--blue);}
+  .ag h3{margin:0;font-size:17px;display:flex;align-items:center;gap:8px;}
+  .badge{font-family:var(--mono);font-size:10px;padding:2px 7px;border-radius:999px;border:1px solid var(--line);}
+  .badge.ok{color:var(--green);border-color:#2c3a2c;}
+  .badge.wip{color:var(--yellow);border-color:#3a352c;}
+  .ag .row{font-size:12.5px;}
+  .ag .lab{font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;}
+  .ag .val{font-family:var(--mono);font-size:12px;color:var(--cyan);word-break:break-all;}
+  .ag pre{margin:4px 0 0;font-family:var(--mono);font-size:10.7px;line-height:1.45;white-space:pre-wrap;
+          background:#181c28;border:1px solid var(--line);border-radius:8px;padding:8px 9px;color:var(--fg);}
+  .ev{display:flex;flex-wrap:wrap;gap:4px;}
+  .ev span{font-family:var(--mono);font-size:10px;padding:2px 6px;border-radius:6px;border:1px solid var(--line);color:var(--muted);}
+  .k-allow{color:var(--green);} .k-deny{color:var(--red);} .k-ask{color:var(--yellow);} .k-str{color:var(--green);} .k-key{color:var(--purple);} .cm{color:var(--muted);}
+
+  /* tables / cards */
+  table{width:100%;border-collapse:collapse;font-size:13px;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top;}
+  th{background:var(--panel2);color:var(--muted);font-size:11.5px;text-transform:uppercase;letter-spacing:.5px;}
+  td:first-child{color:var(--cyan);font-family:var(--mono);font-size:12px;white-space:nowrap;}
+  tr:last-child td{border-bottom:none;}
+  .v-allow{color:var(--green);font-weight:600;} .v-deny{color:var(--red);font-weight:600;} .v-ask{color:var(--yellow);font-weight:600;} .v-pass{color:var(--muted);font-weight:600;}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:15px 17px;}
+  .pair{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+  .card h4{margin:0 0 8px;font-size:14px;} .card pre{margin:0;font-family:var(--mono);font-size:12px;white-space:pre-wrap;color:var(--fg);}
+  .kw{color:var(--purple);} .ty{color:var(--cyan);}
+  .tree{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px;font-family:var(--mono);font-size:12.3px;white-space:pre;overflow:auto;}
+  .tree .d{color:var(--blue);} .tree .g{color:var(--muted);} .tree .h{color:var(--green);}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+  .note{background:#1c2620;border:1px solid #2c3a2c;border-left:3px solid var(--green);border-radius:12px;padding:13px 17px;font-size:13.5px;}
+  .note.warn{background:#2a2520;border-color:#4a3f2f;border-left-color:var(--yellow);}
+  .note b{color:var(--green);} .note.warn b{color:var(--yellow);}
+  footer{color:var(--muted);font-size:12px;margin-top:46px;text-align:center;}
+  @media(max-width:900px){.hex,.pair,.grid2,.agents,.outcomes{grid-template-columns:1fr;}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="tag">// keel · architecture</div>
+    <h1>keel</h1>
+    <p class="sub">Write your agent's safety policy once, run it on any agent.</p>
+    <p>A lean Rust binary that intercepts every AI-agent tool call and auto-permits, auto-denies, or asks you.</p>
+    <div class="chips">
+      <span class="chip"><b>single static binary</b> · Rust</span>
+      <span class="chip"><b>busybox-style</b></span>
+      <span class="chip"><b>~1–3 ms</b>/call</span>
+      <span class="chip"><b>zero runtime deps</b></span>
+    </div>
+  </header>
+
+  <!-- ============ INSTALL / TRANSPARENCY ============ -->
+  <h2>Install &amp; transparency <span class="hint">— tas-style: just install it; you never see keel</span></h2>
+  <div class="flowwrap">
+    <div class="steps">
+      <div class="step"><div class="n">1 · install</div><div class="t">one binary</div><div class="d"><span class="mono">brew install keel</span> (or install script)</div></div>
+      <div class="arrow">▶</div>
+      <div class="step keel"><div class="n">2 · keel init (auto)</div><div class="t">wires everything</div><div class="d">symlink shims · apply hooks to every detected agent · ensure PATH</div></div>
+      <div class="arrow">▶</div>
+      <div class="step"><div class="n">3 · use normally</div><div class="t">run <span class="mono">claude</span> / <span class="mono">codex</span></div><div class="d">policy already enforced — zero per-agent setup</div></div>
+    </div>
+  </div>
+  <div class="note" style="margin-top:14px">
+    <b>PATH hijacking + busybox.</b> <span class="mono">keel init</span> drops <span class="mono">~/.keel/bin/{claude,codex,antigravity}</span>
+    as symlinks to the keel binary, earlier on PATH than the real CLIs. Running <span class="mono">claude</span> actually runs keel,
+    which — by <span class="mono">argv[0]</span> — enters <b>shim mode</b>: re-applies the latest hooks (idempotent, cache-first), then
+    <span class="mono">exec</span>s the real <span class="mono">claude</span> (same PID, no trace in <span class="mono">ps</span>). Fork-bomb avoided by resolving the
+    real binary with <span class="mono">~/.keel/bin</span> excluded from PATH.
+  </div>
+  <div class="pair" style="margin-top:14px">
+    <div class="card"><h4>Two modes, one binary</h4>
+<pre><span class="cm">// argv[0] decides (busybox pattern)</span>
+claude|codex|antigravity → <span class="ty">shim</span>: apply + exec real agent
+keel &lt;cmd&gt;               → <span class="ty">CLI</span>:
+   init · apply · doctor · status
+   run &lt;platform&gt; &lt;stage&gt;   <span class="cm">// the hook handler</span>
+   uninstall · version</pre></div>
+    <div class="card"><h4>Non-destructive &amp; self-healing</h4>
+      <ul style="margin:0;padding-left:18px;font-size:12.5px;color:var(--muted);line-height:1.7">
+        <li>hooks tagged <span class="mono" style="color:var(--cyan)">"__keel": true</span> — merged into settings, never clobbering your config</li>
+        <li>every <span class="mono">claude</span> run re-applies, so it self-heals &amp; picks up updates (cache-first, offline-ok)</li>
+        <li><span class="mono">keel uninstall</span> removes only keel-tagged entries + the shims</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ============ INTERCEPTION ============ -->
+  <h2>Then, at tool-use time, keel intercepts the call <span class="hint">— the applied hooks call keel back</span></h2>
+  <div class="flowwrap">
+    <div class="steps">
+      <div class="step"><div class="n">1 · agent</div><div class="t">about to use a tool</div><div class="d">Read a file, run Bash, edit code…</div></div>
+      <div class="arrow">▶</div>
+      <div class="step"><div class="n">2 · platform hook</div><div class="t">fires keel</div><div class="d"><span class="mono">keel run claude PreToolUse</span> — registered once via <span class="mono">keel install</span></div></div>
+      <div class="arrow">▶</div>
+      <div class="step keel"><div class="n">3 · keel (stdin→stdout)</div><div class="t">decide</div><div class="d">adapter.parse → engine.run(features) → adapter.render · exits in ~1–3 ms</div></div>
+      <div class="arrow">▶</div>
+      <div class="step"><div class="n">4 · platform acts</div><div class="t">reads the verdict</div><div class="d">runs · blocks · prompts you</div></div>
+    </div>
+    <div class="outcomes">
+      <div class="oc allow"><span class="k">allow</span><div class="d">tool runs, no prompt</div></div>
+      <div class="oc deny"><span class="k">deny</span><div class="d">blocked; model told why</div></div>
+      <div class="oc ask"><span class="k">ask</span><div class="d">you get a confirmation prompt</div></div>
+      <div class="oc pass"><span class="k">pass</span><div class="d">defer to the platform's normal flow</div></div>
+    </div>
+  </div>
+  <div class="note" style="margin-top:14px">
+    <b>keel is just a command the agent's own hook system runs.</b> It speaks each platform's hook protocol over
+    <span class="mono">stdin</span>/<span class="mono">stdout</span> — no daemon, no patching the agent, no SDK. The agent
+    stays in control; keel only answers "allow / deny / ask / (defer)".
+  </div>
+
+  <!-- ============ PORTS & ADAPTERS ============ -->
+  <h2>Ports &amp; adapters <span class="hint">— platform variance lives only at the edges</span></h2>
+  <div class="hex">
+    <div class="side">
+      <div class="colhead">inbound · parse</div>
+      <div class="adapter cc"><div class="nm">Claude</div><div class="io">JSON → Event</div></div>
+      <div class="adapter cx"><div class="nm">Codex</div><div class="io">JSON → Event</div></div>
+      <div class="adapter ag"><div class="nm">Antigravity</div><div class="io">JSON → Event</div></div>
+    </div>
+    <div>
+      <div class="arrows">normalize → Event ↓</div>
+      <div class="core">
+        <div class="lbl">core · pure · no I/O</div>
+        <h3>engine: route → aggregate</h3>
+        <div class="flow">Event → features.evaluate() → Verdict<br>(deny &gt; ask &gt; pass &gt; allow)</div>
+      </div>
+      <div class="arrows">↓ Verdict → render</div>
+    </div>
+    <div class="side">
+      <div class="colhead">outbound · render</div>
+      <div class="adapter cc"><div class="nm">Claude</div><div class="io">Verdict → JSON</div></div>
+      <div class="adapter cx"><div class="nm">Codex</div><div class="io">Verdict → JSON</div></div>
+      <div class="adapter ag"><div class="nm">Antigravity</div><div class="io">Verdict → JSON</div></div>
+    </div>
+  </div>
+  <div class="note" style="margin-top:14px">
+    <b>An adapter is exactly two functions</b> — <span class="mono">parse(raw, stage) → Event</span> and
+    <span class="mono">render(verdict, stage) → JSON</span>. It also maps each agent's raw tool names into capability
+    categories (read / write / shell), so the core never knows which agent it's serving. Adding an agent = one file.
+  </div>
+
+  <!-- ============ PER-AGENT WIRING ============ -->
+  <h2>How keel wires into each agent <span class="hint">— config, events, and the actual JSON it exchanges</span></h2>
+  <div class="agents">
+
+    <!-- CLAUDE -->
+    <div class="ag claude">
+      <h3>Claude Code <span class="badge ok">verified</span></h3>
+      <div class="row"><div class="lab">config file</div><div class="val">.claude/settings.json</div></div>
+      <div class="row"><div class="lab">attach</div><div class="val">keel install claude</div></div>
+      <div class="row"><div class="lab">hook events</div><div class="ev"><span>PreToolUse</span><span>PermissionRequest</span><span>SessionStart</span></div></div>
+      <div class="row"><div class="lab">in · stdin</div>
+<pre>{ <span class="k-key">"hook_event_name"</span>: <span class="k-str">"PreToolUse"</span>,
+  <span class="k-key">"tool_name"</span>: <span class="k-str">"Bash"</span>, <span class="k-key">"cwd"</span>: <span class="k-str">"/repo"</span>,
+  <span class="k-key">"tool_input"</span>: { <span class="k-key">"command"</span>: <span class="k-str">"rm -rf /"</span> } }</pre>
+      </div>
+      <div class="row"><div class="lab">out · stdout</div>
+<pre>{ <span class="k-key">"hookSpecificOutput"</span>: {
+    <span class="k-key">"hookEventName"</span>: <span class="k-str">"PreToolUse"</span>,
+    <span class="k-key">"permissionDecision"</span>: <span class="k-deny">"deny"</span>,
+    <span class="k-key">"permissionDecisionReason"</span>: <span class="k-str">"…"</span> } }</pre>
+      </div>
+      <div class="row cm" style="font-size:11.5px">PermissionRequest uses <span class="mono">decision.behavior</span>; <span class="mono">pass</span> → <span class="mono">{"continue":true}</span>.</div>
+    </div>
+
+    <!-- CODEX -->
+    <div class="ag codex">
+      <h3>Codex <span class="badge wip">best-effort</span></h3>
+      <div class="row"><div class="lab">config file</div><div class="val">.codex/hooks.json<br><span class="cm">or [hooks] in config.toml</span></div></div>
+      <div class="row"><div class="lab">attach</div><div class="val">keel install codex</div></div>
+      <div class="row"><div class="lab">hook events</div><div class="ev"><span>PreToolUse</span><span>PermissionRequest</span><span>PostToolUse</span><span>SessionStart</span></div></div>
+      <div class="row"><div class="lab">in · stdin</div>
+<pre>{ <span class="k-key">"hook_event_name"</span>: <span class="k-str">"PreToolUse"</span>,
+  <span class="k-key">"tool_name"</span>: <span class="k-str">"shell"</span>, <span class="k-key">"cwd"</span>: <span class="k-str">"/repo"</span>,
+  <span class="k-key">"tool_input"</span>: { … } }</pre>
+      </div>
+      <div class="row"><div class="lab">out · stdout</div>
+<pre>{ <span class="k-key">"hookSpecificOutput"</span>: {
+    <span class="k-key">"permissionDecision"</span>: <span class="k-deny">"deny"</span> } }</pre>
+      </div>
+      <div class="row cm" style="font-size:11.5px">Alt: declarative <span class="mono">execpolicy</span> Starlark <span class="mono">.rules</span> (allow/prompt/forbidden). Verify vs live docs.</div>
+    </div>
+
+    <!-- ANTIGRAVITY -->
+    <div class="ag anti">
+      <h3>Antigravity <span class="badge wip">best-effort</span></h3>
+      <div class="row"><div class="lab">config file</div><div class="val">.agents/hooks.json<br><span class="cm">or ~/.gemini/config/hooks.json</span></div></div>
+      <div class="row"><div class="lab">attach</div><div class="val">keel install antigravity</div></div>
+      <div class="row"><div class="lab">hook events</div><div class="ev"><span>PreToolUse</span><span>PostToolUse</span><span>Pre/PostInvocation</span><span>Stop</span></div></div>
+      <div class="row"><div class="lab">in · stdin</div>
+<pre>{ <span class="k-key">"toolCall"</span>: { <span class="k-key">"name"</span>: <span class="k-str">"run_command"</span>,
+              <span class="k-key">"args"</span>: { … } },
+  <span class="k-key">"workspacePaths"</span>: [<span class="k-str">"/repo"</span>] }</pre>
+      </div>
+      <div class="row"><div class="lab">out · stdout</div>
+<pre>{ <span class="k-key">"decision"</span>: <span class="k-deny">"deny"</span>,
+  <span class="k-key">"reason"</span>: <span class="k-str">"…"</span> }</pre>
+      </div>
+      <div class="row cm" style="font-size:11.5px">⚠ official docs are JS-rendered; field names from secondary sources — confirm live.</div>
+    </div>
+  </div>
+
+  <!-- VERDICT MAPPING -->
+  <h2>One verdict → each agent's native output</h2>
+  <table>
+    <thead><tr><th>keel Verdict</th><th>Claude Code</th><th>Codex</th><th>Antigravity</th></tr></thead>
+    <tbody>
+      <tr><td class="v-allow">allow</td><td>permissionDecision <span class="mono">"allow"</span></td><td><span class="mono">"allow"</span></td><td><span class="mono">{decision:"allow"}</span></td></tr>
+      <tr><td class="v-deny">deny</td><td><span class="mono">"deny"</span></td><td><span class="mono">"deny"</span></td><td><span class="mono">{decision:"deny"}</span></td></tr>
+      <tr><td class="v-ask">ask</td><td><span class="mono">"ask"</span></td><td><span class="mono">"ask"</span></td><td><span class="mono">{decision:"ask"}</span></td></tr>
+      <tr><td class="v-pass">pass</td><td><span class="mono">{"continue":true}</span></td><td><span class="mono">{}</span></td><td><span class="mono">{}</span> (no decision)</td></tr>
+    </tbody>
+  </table>
+
+  <!-- CONTRACTS -->
+  <h2>The two contracts the core knows</h2>
+  <div class="pair">
+    <div class="card"><h4>Event (in)</h4>
+<pre><span class="kw">struct</span> Event { stage: <span class="ty">String</span>, tool: <span class="ty">Option&lt;String&gt;</span>,
+  tool_input: <span class="ty">Value</span>, cwd: <span class="ty">String</span>, root: <span class="ty">String</span> }
+<span class="cm">// .file_path() / .command()</span></pre></div>
+    <div class="card"><h4>Verdict (out)</h4>
+<pre><span class="kw">enum</span> Decision { Allow, Pass, Ask, Deny }
+<span class="kw">struct</span> Verdict { decision: <span class="ty">Decision</span>,
+  reason: <span class="ty">String</span>, source: <span class="ty">String</span> }</pre></div>
+  </div>
+
+  <!-- FEATURES -->
+  <h2>Features <span class="hint">— compiled-in applets; aggregate most-restrictive-wins</span></h2>
+  <table>
+    <thead><tr><th>feature</th><th>stage(s)</th><th>does</th></tr></thead>
+    <tbody>
+      <tr><td>autopermit</td><td>PreToolUse · PermissionRequest</td><td>permit non-secret reads + worktree writes + safe shell; <span class="v-ask">ask</span> secrets; <span class="v-deny">deny</span> out-of-worktree writes &amp; catastrophic commands</td></tr>
+      <tr><td>branch-guard</td><td>PreToolUse</td><td><span class="v-deny">deny</span> mutating git on a protected branch</td></tr>
+      <tr><td>secret-scan</td><td>PreToolUse</td><td><span class="v-ask">ask</span> when write <em>content</em> looks like a credential</td></tr>
+      <tr><td>audit-log</td><td>Pre/PostToolUse</td><td>append every call + verdict to JSONL (observer)</td></tr>
+      <tr><td>session-banner</td><td>SessionStart</td><td>announce active features + runtime (observer)</td></tr>
+    </tbody>
+  </table>
+
+  <!-- RULE + LAYOUT -->
+  <h2>Design invariants</h2>
+  <div class="grid2">
+    <div class="note warn"><b>Load-bearing stage.</b> Read-only tools are auto-allowed with no prompt on every agent, so a
+      PermissionRequest hook never fires for them. So <span class="v-ask">ask</span>/<span class="v-deny">deny</span>
+      guarantees are emitted at the always-runs <b>pre-tool stage</b>; the permission-request stage re-derives the same
+      verdict and can never disagree.</div>
+    <div class="tree"><span class="d">keel/</span>
+├─ src/  <span class="g">model · engine · runtime</span>
+│  ├─ <span class="h">adapters/</span>  <span class="g">claude · codex · antigravity</span>
+│  ├─ <span class="h">features/</span>  <span class="g">autopermit/{policy,shell} + …</span>
+│  └─ main.rs   <span class="g">busybox dispatch</span>
+├─ reference/python/  <span class="g"># spec + oracle → retiring</span>
+└─ packaging/         <span class="g"># Homebrew formula</span></div>
+  </div>
+
+  <div class="note" style="margin-top:14px"><b>Migration.</b> The verified Python build is now <span class="mono">reference/python/</span> —
+    the executable spec &amp; 76-test oracle. The Rust port is validated against it, then Python retires. Ports-and-adapters
+    ports verbatim; only the language changes.</div>
+
+  <footer>keel · ports-and-adapters hook harness · Claude Code (verified) · Codex &amp; Antigravity (best-effort)</footer>
+</div>
+</body>
+</html>

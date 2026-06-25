@@ -1,0 +1,22 @@
+# Rust
+/target/
+# Cargo.lock IS committed (binary crate)
+
+# Python reference (reference/python/)
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# keel runtime artifacts
+.keel/
+
+# Environments / editor / OS
+.venv/
+venv/
+.idea/
+.vscode/
+.DS_Store
+*.swp
