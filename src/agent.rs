@@ -350,4 +350,89 @@ mod tests {
         std::env::remove_var("KEEL_HOME");
         std::fs::remove_dir_all(&tmp).ok();
     }
+
+    #[test]
+    fn claude_shape_matcher_only_on_tool_stages() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tmp = std::env::temp_dir().join(format!("keel-shape-c-{}", std::process::id()));
+        std::fs::create_dir_all(tmp.join(".claude")).unwrap();
+        std::env::set_var("KEEL_HOME", &tmp);
+
+        let claude = agent_by_bin("claude").unwrap();
+        apply(claude).unwrap();
+        let cfg: Value =
+            serde_json::from_str(&std::fs::read_to_string(hooks_path(claude)).unwrap()).unwrap();
+        let hooks = &cfg["hooks"];
+        assert_eq!(
+            hooks["PreToolUse"][0]["hooks"][0]["command"],
+            "keel run claude PreToolUse"
+        );
+        assert!(hooks["PreToolUse"][0].get("matcher").is_some());
+        assert_eq!(
+            hooks["PermissionRequest"][0]["hooks"][0]["command"],
+            "keel run claude PermissionRequest"
+        );
+        assert!(hooks["SessionStart"][0].get("matcher").is_none());
+
+        std::env::remove_var("KEEL_HOME");
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn codex_and_antigravity_registration_shapes() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tmp = std::env::temp_dir().join(format!("keel-shape-ca-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::env::set_var("KEEL_HOME", &tmp);
+
+        let codex = agent_by_bin("codex").unwrap();
+        apply(codex).unwrap();
+        let cfg: Value =
+            serde_json::from_str(&std::fs::read_to_string(hooks_path(codex)).unwrap()).unwrap();
+        assert_eq!(
+            cfg["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
+            "keel run codex PreToolUse"
+        );
+
+        let antig = agent_by_bin("agy").unwrap();
+        apply(antig).unwrap();
+        let cfg: Value =
+            serde_json::from_str(&std::fs::read_to_string(hooks_path(antig)).unwrap()).unwrap();
+        // flat shape: command sits directly on the stage entry (no "hooks" nesting)
+        assert_eq!(
+            cfg["PreToolUse"][0]["command"],
+            "keel run antigravity PreToolUse"
+        );
+
+        std::env::remove_var("KEEL_HOME");
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn apply_merges_into_existing_config() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tmp = std::env::temp_dir().join(format!("keel-merge-{}", std::process::id()));
+        std::fs::create_dir_all(tmp.join(".claude")).unwrap();
+        std::env::set_var("KEEL_HOME", &tmp);
+
+        let claude = agent_by_bin("claude").unwrap();
+        let path = hooks_path(claude);
+        std::fs::write(
+            &path,
+            r#"{"permissions":{"allow":["Read"]},"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"foreign"}]}]}}"#,
+        )
+        .unwrap();
+        apply(claude).unwrap();
+
+        let cfg: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(cfg["permissions"]["allow"][0], "Read"); // unrelated key preserved
+        let pre = cfg["hooks"]["PreToolUse"].as_array().unwrap();
+        assert!(pre.iter().any(|e| e["hooks"][0]["command"] == "foreign")); // foreign hook kept
+        assert!(pre
+            .iter()
+            .any(|e| e["hooks"][0]["command"] == "keel run claude PreToolUse")); // keel added
+
+        std::env::remove_var("KEEL_HOME");
+        std::fs::remove_dir_all(&tmp).ok();
+    }
 }

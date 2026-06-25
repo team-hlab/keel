@@ -369,7 +369,12 @@ mod tests {
     fn safe_allow() {
         for c in [
             "ls -la",
+            "cat f",
             "git status",
+            "git -C x log",
+            "pwd",
+            "echo hi",
+            "grep -r foo .",
             "cat f | grep x | wc -l",
             "VAR=1 ls",
             "sed -n 1p f",
@@ -377,6 +382,7 @@ mod tests {
             assert_eq!(d(c, ROOT), Decision::Allow, "{c}");
         }
         assert_eq!(d("echo \"a; b && c\"", ROOT), Decision::Allow);
+        assert_eq!(d("grep 'x && y' file", ROOT), Decision::Allow); // single quotes protect
     }
 
     #[test]
@@ -384,9 +390,18 @@ mod tests {
         for c in [
             "rm -rf /",
             "rm -rf ~",
+            "rm -fr /*",
+            "sudo rm -rf x",
             "git push --force",
-            "ls && rm -rf /",
+            "git push -f origin m",
+            "git reset --hard",
+            "git clean -fd",
+            "dd if=/dev/zero of=x",
+            "mkfs.ext4 /dev/sda",
             "gh pr merge 3",
+            "gh issue close 4",
+            "ls && rm -rf /",   // deny anywhere in a chain
+            "true || rm -rf ~", // ...including the || branch
         ] {
             assert_eq!(d(c, ROOT), Decision::Deny, "{c}");
         }
@@ -395,6 +410,9 @@ mod tests {
     #[test]
     fn worktree_allow() {
         assert_eq!(d("echo hi > worktrees/f/a", ROOT), Decision::Allow);
+        assert_eq!(d("ls | tee worktrees/f/log", ROOT), Decision::Allow);
+        assert_eq!(d("mkdir worktrees/f/sub", ROOT), Decision::Allow);
+        assert_eq!(d("cp a b", "/repo/worktrees/f"), Decision::Allow);
         assert_eq!(d("npm test", "/repo/worktrees/f"), Decision::Allow);
         assert_eq!(d("(cd worktrees/f && npm test)", ROOT), Decision::Allow);
         assert_eq!(
@@ -408,6 +426,7 @@ mod tests {
     fn protected_deny() {
         assert_eq!(d("echo x > projects/foo/main/y", ROOT), Decision::Deny);
         assert_eq!(d("mkdir projects/foo/main/sub", ROOT), Decision::Deny);
+        assert_eq!(d("echo x > CLAUDE.md", ROOT), Decision::Deny); // protected root file
     }
 
     #[test]
@@ -423,8 +442,13 @@ mod tests {
             "weirdcmd --go",
             "npm test",
             "echo x > /tmp/out",
+            "cp a /etc/x",                          // FILE_WRITE outside root
+            "git -C projects/foo/main commit -m x", // git-write outside worktree
             "sed -i s/a/b/ f",
             "echo $HOME",
+            "cat ${FILE}",
+            "ls $(pwd)",
+            "echo `date`",
         ] {
             assert_eq!(d(c, ROOT), Decision::Pass, "{c}");
         }
@@ -435,7 +459,46 @@ mod tests {
     fn aggregation_precedence() {
         assert_eq!(d("ls && weirdcmd", ROOT), Decision::Pass);
         assert_eq!(d("ls && echo x > .env", ROOT), Decision::Ask);
+        assert_eq!(d("weirdcmd && echo x > .env", ROOT), Decision::Ask); // pass+ask=ask
         assert_eq!(d("echo x > .env && rm -rf /", ROOT), Decision::Deny);
+        assert_eq!(
+            d("npm test && echo ok > worktrees/f/l", "/repo/worktrees/f"),
+            Decision::Allow
+        );
         assert_eq!(d("", ROOT), Decision::Pass);
+    }
+
+    #[test]
+    fn malformed_and_none() {
+        assert_eq!(d("   ", ROOT), Decision::Pass); // whitespace only
+        assert_eq!(d("# comment", ROOT), Decision::Pass); // comment only
+        let p = pats();
+        let r = write_allow_regexes("worktrees", "projects");
+        assert_eq!(
+            decide_bash(None, Some(ROOT), ROOT, &p, &r, &normpath),
+            Decision::Pass
+        );
+    }
+
+    #[test]
+    fn helper_redirect_targets() {
+        assert_eq!(redirect_targets("echo x > a"), ["a"]);
+        assert_eq!(redirect_targets("ls 2>&1 > b"), ["b"]); // fd-redirect stripped
+        assert!(redirect_targets("ls > /dev/null").is_empty()); // devnull stripped
+        assert_eq!(redirect_targets("ls | tee -a c"), ["c"]);
+    }
+
+    #[test]
+    fn helper_split_segments() {
+        assert_eq!(split_segments("a && b; c | d"), ["a", "b", "c", "d"]);
+        assert_eq!(split_segments("echo \"a && b\""), ["echo \"a && b\""]); // quotes protect
+    }
+
+    #[test]
+    fn helper_has_expansion() {
+        assert!(has_expansion("echo $X"));
+        assert!(has_expansion("echo `x`"));
+        assert!(!has_expansion("echo plain"));
+        assert!(!has_expansion("grep '$X' f")); // single-quoted expansion ignored
     }
 }

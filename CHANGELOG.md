@@ -6,11 +6,12 @@ the version — see [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
-### Security
-- The Homebrew tap update no longer uses a long-lived PAT. `bump-tap` mints a
-  **short-lived GitHub App token scoped to only `team-hlab/homebrew-keel`** (auto-revoked
-  per run), configured via the `release` environment (`TAP_APP_ID` var +
-  `TAP_APP_PRIVATE_KEY` secret). See [docs/RELEASING.md](docs/RELEASING.md).
+### Changed
+- Ported the Python reference test suite (policy, shell, engine, features, install,
+  e2e, no-external-deps) into Rust unit/integration tests, retired the `python-oracle`
+  CI job, and removed `reference/python/`. The Rust source + tests are now the single
+  source of truth. The `no_external_deps` guard becomes a `Cargo.toml` dependency
+  allowlist (`tests/deps.rs`).
 
 ### Fixed
 - Antigravity adapter now shims the real CLI binary **`agy`** (plain `antigravity` is the
@@ -20,6 +21,12 @@ the version — see [docs/RELEASING.md](docs/RELEASING.md).
   shimmed binary (e.g. `antigravity (agy)`) so it's clear what keel actually wraps.
   Verified Antigravity's global hooks path is `~/.gemini/config/hooks.json` (the path keel
   already uses); the `agy` binary and `PreToolUse` event are confirmed too.
+
+### Security
+- The Homebrew tap update no longer uses a long-lived PAT. `bump-tap` mints a
+  **short-lived GitHub App token scoped to only `team-hlab/homebrew-keel`** (auto-revoked
+  per run, SHA-pinned action), configured via the `release` environment (`TAP_APP_ID` var
+  + `TAP_APP_PRIVATE_KEY` secret). See [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [0.1.0] — 2026-06-25
 
