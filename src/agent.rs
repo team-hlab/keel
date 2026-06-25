@@ -100,6 +100,17 @@ fn read_json(path: &Path) -> Value {
         .unwrap_or_else(|| Value::Object(Map::new()))
 }
 
+/// Load a config for *merging*. `None` means the file exists but can't be read or parsed —
+/// the caller MUST NOT overwrite it (preserve the user's file). Missing file → empty object.
+fn load_cfg(path: &Path) -> Option<Value> {
+    if !path.exists() {
+        return Some(Value::Object(Map::new()));
+    }
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+}
+
 fn write_json(path: &Path, v: &Value) -> std::io::Result<()> {
     if let Some(p) = path.parent() {
         std::fs::create_dir_all(p)?;
@@ -181,7 +192,17 @@ fn apply_antigravity(cfg: &mut Value, name: &str) -> bool {
 /// Merge keel's hooks into the agent's config. Returns whether anything changed.
 pub fn apply(a: &Agent) -> std::io::Result<bool> {
     let path = hooks_path(a);
-    let mut cfg = read_json(&path);
+    let mut cfg = match load_cfg(&path) {
+        Some(v) => v,
+        None => {
+            // exists but unparseable/unreadable — never clobber the user's file
+            eprintln!(
+                "keel: {} could not be parsed — leaving it untouched (hooks not applied)",
+                path.display()
+            );
+            return Ok(false);
+        }
+    };
     let changed = if a.antigravity_shape {
         apply_antigravity(&mut cfg, a.name)
     } else {
@@ -207,7 +228,10 @@ pub fn clean(a: &Agent) -> std::io::Result<()> {
     if !path.exists() {
         return Ok(());
     }
-    let mut cfg = read_json(&path);
+    let mut cfg = match load_cfg(&path) {
+        Some(v) => v,
+        None => return Ok(()), // unparseable — leave it untouched
+    };
     if a.antigravity_shape {
         if let Some(m) = cfg.as_object_mut() {
             strip_keel(m);
@@ -285,5 +309,26 @@ mod tests {
         assert!(find_on_path("faketool", None).is_some());
         assert!(find_on_path("faketool", Some(dir.as_path())).is_none()); // excluded
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn apply_preserves_malformed_config() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tmp = std::env::temp_dir().join(format!("keel-mal-{}", std::process::id()));
+        std::fs::create_dir_all(tmp.join(".claude")).unwrap();
+        std::env::set_var("KEEL_HOME", &tmp);
+
+        let claude = agent_by_bin("claude").unwrap();
+        let path = hooks_path(claude);
+        let garbage = "{ this is : not json ]";
+        std::fs::write(&path, garbage).unwrap();
+
+        // apply must refuse to touch a file it couldn't parse (non-destructive)
+        assert!(!apply(claude).unwrap());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), garbage);
+        assert_eq!(applied_count(claude), 0);
+
+        std::env::remove_var("KEEL_HOME");
+        std::fs::remove_dir_all(&tmp).ok();
     }
 }

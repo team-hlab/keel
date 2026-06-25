@@ -32,7 +32,7 @@ This repo is mid-port from a verified Python implementation to Rust (the Python 
 
 - ✅ **Hook engine** — `keel run <platform> <stage>`, the `autopermit` feature (files **and** full shell parsing), and Claude/Codex/Antigravity adapters. **Behavior verified 1:1 against the Python oracle.**
 - ✅ **Transparent shim** — `keel init` / `apply` / `uninstall` / `doctor`: PATH-hijack symlinks, non-destructive `__keel` markers, `exec`s the real agent.
-- ✅ **All five features** — autopermit, branch-guard, secret-scan, audit-log (opt-in), session-banner. **34 tests (23 unit + 11 binary-level e2e); clippy/fmt clean.**
+- ✅ **All five features** — autopermit, branch-guard, secret-scan, audit-log (opt-in), session-banner. **40 tests (24 unit + 16 binary-level e2e), incl. edge-case & fault-tolerance; clippy/fmt clean.**
 
 ## Features
 

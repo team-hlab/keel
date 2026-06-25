@@ -332,3 +332,132 @@ fn shim_execs_real_agent_and_avoids_forkbomb() {
     );
     fs::remove_dir_all(&home).ok();
 }
+
+// ---- edge cases: malformed / odd input must fail open --------------------
+
+#[test]
+fn edge_inputs_fail_open() {
+    let cont = r#"{"continue":true}"#;
+    for stdin in [
+        "", "[1,2,3]", "\"hi\"", "42", "{}", "}{ bad", "null", "true",
+    ] {
+        let o = run(&["run", "claude", "PreToolUse"], stdin, &[]);
+        assert_eq!(o.code, 0, "stdin={stdin:?}");
+        assert_eq!(o.stdout.trim(), cont, "stdin={stdin:?}");
+    }
+    // deeply nested JSON (past serde's recursion limit) → parse error → fail open
+    let deep = format!("{}{}", "[".repeat(600), "]".repeat(600));
+    let o = run(&["run", "claude", "PreToolUse"], &deep, &[]);
+    assert_eq!(o.code, 0);
+    assert_eq!(o.stdout.trim(), cont);
+}
+
+#[test]
+fn missing_and_nonstring_fields_dont_crash() {
+    let root = project_root();
+    let r = root.to_str().unwrap();
+    let go = |v: Value| -> Out {
+        run(
+            &["run", "claude", "PreToolUse"],
+            &v.to_string(),
+            &[("KEEL_ROOT", r)],
+        )
+    };
+    let dec = |o: &Out| -> String {
+        let v: Value = serde_json::from_str(o.stdout.trim()).unwrap();
+        v.get("hookSpecificOutput")
+            .and_then(|h| h.get("permissionDecision"))
+            .and_then(Value::as_str)
+            .unwrap_or("pass")
+            .to_string()
+    };
+    // missing tool_name → pass
+    assert_eq!(dec(&go(serde_json::json!({ "cwd": r }))), "pass");
+    // missing tool_input → Read allow, Write deny
+    assert_eq!(
+        dec(&go(serde_json::json!({ "tool_name": "Read", "cwd": r }))),
+        "allow"
+    );
+    assert_eq!(
+        dec(&go(serde_json::json!({ "tool_name": "Write", "cwd": r }))),
+        "deny"
+    );
+    // non-string file_path / command → no crash, sensible verdict
+    assert_eq!(
+        dec(&go(
+            serde_json::json!({ "tool_name": "Read", "cwd": r, "tool_input": { "file_path": 123 } })
+        )),
+        "allow"
+    );
+    assert_eq!(
+        dec(&go(
+            serde_json::json!({ "tool_name": "Write", "cwd": r, "tool_input": { "file_path": 123 } })
+        )),
+        "deny"
+    );
+    let bash =
+        go(serde_json::json!({ "tool_name": "Bash", "cwd": r, "tool_input": { "command": 123 } }));
+    assert_eq!(bash.code, 0);
+    assert_eq!(bash.stdout.trim(), r#"{"continue":true}"#);
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn large_input_does_not_hang() {
+    let root = project_root();
+    let r = root.to_str().unwrap();
+    let big = format!("echo {}", "a ".repeat(100_000)); // ~200 KB
+    let o = run(
+        &["run", "claude", "PreToolUse"],
+        &payload("Bash", "command", &big, r),
+        &[("KEEL_ROOT", r)],
+    );
+    assert_eq!(o.code, 0);
+    serde_json::from_str::<Value>(o.stdout.trim()).expect("valid JSON, no hang/crash");
+    fs::remove_dir_all(&root).ok();
+}
+
+// ---- fault tolerance: bad env / config / observer failure ----------------
+
+#[test]
+fn fault_tolerant_root_and_config() {
+    // nonexistent KEEL_ROOT → still decides, no crash
+    let o = run(
+        &["run", "claude", "PreToolUse"],
+        &payload("Read", "file_path", "a.md", "/repo"),
+        &[("KEEL_ROOT", "/no/such/keel/root")],
+    );
+    assert_eq!(o.code, 0);
+
+    let root = project_root();
+    let r = root.to_str().unwrap();
+    let read = payload("Read", "file_path", "a.md", r);
+
+    // malformed .keel.json → ignored, default features still work
+    fs::write(root.join(".keel.json"), "{ not json ]").unwrap();
+    assert_eq!(pre("claude", &read, r), "allow");
+
+    // non-object config → ignored
+    fs::write(root.join(".keel.json"), "[]").unwrap();
+    assert_eq!(pre("claude", &read, r), "allow");
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn audit_log_failure_does_not_break_verdict() {
+    let root = project_root();
+    let r = root.to_str().unwrap();
+    // make the audit dir un-creatable: a FILE where .keel/ would go
+    fs::write(root.join(".keel"), "x").unwrap();
+    fs::write(
+        root.join(".keel.json"),
+        r#"{"features":{"audit-log":{"enabled":true}}}"#,
+    )
+    .unwrap();
+    // observer fails silently; the gating verdict is unaffected
+    assert_eq!(
+        pre("claude", &payload("Read", "file_path", "a.md", r), r),
+        "allow"
+    );
+    fs::remove_dir_all(&root).ok();
+}
