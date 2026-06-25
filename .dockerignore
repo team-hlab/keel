@@ -5,3 +5,4 @@ reference/
 *.html
 **/__pycache__/
 **/*.pyc
+target-linux/
