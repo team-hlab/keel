@@ -88,7 +88,7 @@ pub fn init() -> i32 {
         return 1;
     }
     let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("keel"));
-    let mut attached = Vec::new();
+    let mut attached: Vec<String> = Vec::new();
     for a in AGENTS {
         if !agent::detect(a) {
             continue;
@@ -98,7 +98,7 @@ pub fn init() -> i32 {
             continue;
         }
         let _ = agent::apply(a);
-        attached.push(a.name);
+        attached.push(agent::label(a));
     }
     if attached.is_empty() {
         println!("keel init: no agents detected (looked for claude / codex / antigravity).");
@@ -155,13 +155,13 @@ pub fn doctor() -> i32 {
     );
     for a in AGENTS {
         if !agent::detect(a) {
-            println!("  {:<11} not detected", a.name);
+            println!("  {:<18} not detected", agent::label(a));
             continue;
         }
         let shimmed = std::fs::symlink_metadata(bin_dir.join(a.bin)).is_ok();
         println!(
-            "  {:<11} detected · shim {} · {} hooks applied",
-            a.name,
+            "  {:<18} detected · shim {} · {} hooks applied",
+            agent::label(a),
             if shimmed { "✓" } else { "✗" },
             agent::applied_count(a)
         );

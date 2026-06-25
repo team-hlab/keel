@@ -59,6 +59,16 @@ pub fn agent_by_bin(bin: &str) -> Option<&'static Agent> {
     AGENTS.iter().find(|a| a.bin == bin)
 }
 
+/// Display label that surfaces the shimmed binary when it differs from the platform
+/// name (e.g. `antigravity (agy)`), so init/doctor show what keel actually wraps.
+pub fn label(a: &Agent) -> String {
+    if a.bin == a.name {
+        a.name.to_string()
+    } else {
+        format!("{} ({})", a.name, a.bin)
+    }
+}
+
 pub fn agent_home(a: &Agent) -> PathBuf {
     home().join(a.home)
 }
