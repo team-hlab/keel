@@ -4,11 +4,13 @@
 //! (via the shim symlinks) it enters shim mode (Phase 2); otherwise it's the `keel` CLI.
 
 mod adapters;
+mod agent;
 mod engine;
 mod features;
 mod model;
 mod registry;
 mod runtime;
+mod shim;
 
 use std::panic::catch_unwind;
 use std::path::Path;
@@ -20,8 +22,10 @@ keel — a permission/policy harness for AI coding agents.
 Every tool call passes through keel, which auto-permits, auto-denies, or asks you.
 
 usage:
-  keel run <claude|codex|antigravity> <stage>   # hook entrypoint
-  keel features | doctor
+  keel init                                     # attach keel to your installed agents
+  keel apply | uninstall | doctor | status      # manage the install
+  keel run <claude|codex|antigravity> <stage>   # hook entrypoint (used by the hooks)
+  keel features
 ";
 
 fn main() {
@@ -30,10 +34,9 @@ fn main() {
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("");
+    // busybox: invoked as an agent name → shim mode (apply + exec the real agent)
     if matches!(base, "claude" | "codex" | "antigravity") {
-        // Phase 2: shim mode — apply harness, then exec the real agent.
-        eprintln!("keel: shim mode for '{base}' is not implemented yet (Phase 2)");
-        std::process::exit(0);
+        shim::run_shim(base);
     }
     let args: Vec<String> = std::env::args().skip(1).collect();
     std::process::exit(cli(&args));
@@ -60,10 +63,10 @@ fn cli(args: &[String]) -> i32 {
             }
             0
         }
-        "doctor" => {
-            println!("keel {} ok", env!("CARGO_PKG_VERSION"));
-            0
-        }
+        "init" => shim::init(),
+        "apply" => shim::apply_all(),
+        "uninstall" => shim::uninstall(),
+        "doctor" | "status" => shim::doctor(),
         _ => {
             eprint!("{USAGE}");
             2

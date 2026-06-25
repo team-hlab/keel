@@ -30,8 +30,9 @@ brew upgrade keel         # update later
 
 This repo is mid-port from a verified Python implementation to Rust (the Python lives in `reference/python/` as the spec + test oracle, and is being retired).
 
-- ✅ **Hook engine** — `keel run <platform> <stage>`, the `autopermit` feature (files **and** full shell parsing), and Claude/Codex/Antigravity adapters. 14 Rust tests; **behavior verified 1:1 against the Python oracle.**
-- 🚧 **Transparent shim** (`keel init` / `apply` / `uninstall`) and the remaining features (branch-guard, secret-scan, audit-log, session-banner) — in progress.
+- ✅ **Hook engine** — `keel run <platform> <stage>`, the `autopermit` feature (files **and** full shell parsing), and Claude/Codex/Antigravity adapters. **Behavior verified 1:1 against the Python oracle.**
+- ✅ **Transparent shim** — `keel init` / `apply` / `uninstall` / `doctor`: PATH-hijack symlinks, non-destructive `__keel` markers, `exec`s the real agent. (16 Rust tests.)
+- 🚧 Remaining features (branch-guard, secret-scan, audit-log, session-banner) — in progress.
 
 ## Features
 
