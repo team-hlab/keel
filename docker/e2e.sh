@@ -9,9 +9,9 @@ fail() { echo "✗ $*" >&2; exit 1; }
 ok()   { echo "✓ $*"; }
 export HOME=/root
 
-# --- stub Antigravity (no clean headless install; real CLI is `agy`, naming TBD) ---
-printf '#!/bin/sh\necho "STUB antigravity $*"\n' > /usr/local/bin/antigravity
-chmod +x /usr/local/bin/antigravity
+# --- stub the Antigravity CLI `agy` (no clean headless install) ---
+printf '#!/bin/sh\necho "STUB agy $*"\n' > /usr/local/bin/agy
+chmod +x /usr/local/bin/agy
 mkdir -p "$HOME/.gemini"
 
 echo "== real agents present (offline --version, no auth) =="
@@ -27,10 +27,10 @@ ok "keel features lists all 5"
 
 echo "== keel init (attach to all agents) =="
 keel init
-for a in claude codex antigravity; do
+for a in claude codex agy; do
   [ -L "$HOME/.keel/bin/$a" ] || fail "shim symlink missing: $a"
 done
-ok "shims created for claude/codex/antigravity"
+ok "shims created for claude/codex/agy"
 
 echo "== hooks applied to each agent's config =="
 grep -q "keel run claude PreToolUse"      "$HOME/.claude/settings.json"      || fail "claude hook not applied"
@@ -77,9 +77,9 @@ ok "shim exec real claude → $out"
 out=$(timeout 30 codex --version 2>&1 || true)
 echo "$out" | grep -qE '[0-9]+\.[0-9]+' || fail "shim did not exec real codex (got: $out)"
 ok "shim exec real codex"
-out=$(antigravity --version 2>&1 || true)
-echo "$out" | grep -q 'STUB antigravity' || fail "shim did not exec antigravity stub (got: $out)"
-ok "shim exec antigravity stub"
+out=$(agy --version 2>&1 || true)
+echo "$out" | grep -q 'STUB agy' || fail "shim did not exec antigravity (agy) stub (got: $out)"
+ok "shim exec antigravity (agy) stub"
 
 echo "== keel uninstall (clean reversal) =="
 keel uninstall

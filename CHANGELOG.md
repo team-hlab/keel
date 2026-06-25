@@ -6,6 +6,12 @@ the version — see [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+### Fixed
+- Antigravity adapter now shims the real CLI binary **`agy`** (plain `antigravity` is the
+  GUI IDE launcher, not a hookable CLI). Platform name (`antigravity`) and config path
+  (`~/.gemini/config/hooks.json`) are unchanged. Busybox dispatch now derives shim names
+  from the registered agents rather than a hard-coded list.
+
 ## [0.1.0] — 2026-06-25
 
 ### Added

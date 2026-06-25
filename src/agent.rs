@@ -30,7 +30,8 @@ pub const AGENTS: &[Agent] = &[
     },
     Agent {
         name: "antigravity",
-        bin: "antigravity",
+        // the real Antigravity CLI is `agy`; plain `antigravity` is the GUI IDE launcher
+        bin: "agy",
         home: ".gemini",
         hooks_rel: "config/hooks.json",
         antigravity_shape: true,
@@ -270,6 +271,13 @@ mod tests {
 
     // env mutation isn't thread-safe; serialize the tests that touch PATH/KEEL_HOME.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn agy_is_the_antigravity_binary() {
+        assert_eq!(agent_by_bin("agy").unwrap().name, "antigravity");
+        // plain `antigravity` is the GUI IDE launcher — must NOT be shimmed
+        assert!(agent_by_bin("antigravity").is_none());
+    }
 
     #[test]
     fn apply_idempotent_and_clean() {

@@ -34,8 +34,9 @@ fn main() {
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("");
-    // busybox: invoked as an agent name → shim mode (apply + exec the real agent)
-    if matches!(base, "claude" | "codex" | "antigravity") {
+    // busybox: invoked as an agent's binary name (claude/codex/agy via the shim
+    // symlinks) → shim mode (apply + exec the real agent)
+    if agent::agent_by_bin(base).is_some() {
         shim::run_shim(base);
     }
     let args: Vec<String> = std::env::args().skip(1).collect();
