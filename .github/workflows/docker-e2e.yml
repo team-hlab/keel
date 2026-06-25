@@ -1,8 +1,9 @@
 name: docker-e2e
 
 # Builds keel + the real Claude/Codex CLIs in a container and runs the full
-# install/attach/shim/uninstall lifecycle (docker/e2e.sh). Heavier than the unit
-# CI, so it's its own workflow.
+# install/attach/shim/uninstall lifecycle (docker/e2e.sh). Uses GH layer cache so
+# the heavy layers (npm install of the agents) are reused → fast repeat runs.
+# Evidence (log + rendered PNG) is uploaded as an artifact and shown in the summary.
 on:
   pull_request:
   push:
@@ -19,7 +20,53 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: build image
-        run: docker build -f docker/e2e.Dockerfile -t keel-e2e .
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: build image (layer-cached)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/e2e.Dockerfile
+          tags: keel-e2e:latest
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
       - name: run lifecycle e2e
-        run: docker run --rm keel-e2e
+        shell: bash
+        run: |
+          set -o pipefail
+          docker run --rm keel-e2e | tee e2e-output.txt
+
+      - name: evidence → step summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '### keel docker e2e — real Claude Code + Codex, stubbed Antigravity'
+            echo '```'
+            cat e2e-output.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: evidence → render PNG
+        if: always()
+        shell: bash
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends imagemagick fonts-dejavu-core
+          convert -size 1200x -background '#11121a' -fill '#c8d3f5' \
+            -font /usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf -pointsize 17 \
+            -bordercolor '#11121a' -border 28 \
+            caption:"$(cat e2e-output.txt)" e2e-evidence.png || echo "png render skipped"
+
+      - name: upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: keel-e2e-evidence
+          path: |
+            e2e-output.txt
+            e2e-evidence.png
+          if-no-files-found: warn
