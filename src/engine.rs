@@ -127,6 +127,13 @@ mod tests {
         // a lone abstaining (None-returning) feature → Pass
         let only_abstain: Vec<Box<dyn Feature>> = vec![Box::new(Abstain)];
         assert_eq!(run(&ev(), &only_abstain).decision, Decision::Pass);
+        // abstention must be FILTERED, not coerced to Pass: [None, Allow] → Allow
+        // (Pass outranks Allow, so a None-as-Pass bug would surface here as Pass).
+        let abstain_plus_allow: Vec<Box<dyn Feature>> = vec![
+            Box::new(Abstain),
+            Box::new(Fixed(Decision::Allow, &["PreToolUse"])),
+        ];
+        assert_eq!(run(&ev(), &abstain_plus_allow).decision, Decision::Allow);
     }
 
     #[test]
