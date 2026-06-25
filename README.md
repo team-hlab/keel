@@ -12,7 +12,7 @@
 
 ## How it works
 
-1. **Shim (PATH hijack + busybox).** `keel init` symlinks `~/.keel/bin/{claude,codex,antigravity}` to the keel binary, ahead of the real CLIs on PATH. Running `claude` runs keel (by `argv[0]`), which re-applies the latest hooks (idempotent, non-destructive via a `__keel` marker), then `exec`s the real `claude` — same PID, invisible in `ps`.
+1. **Shim (PATH hijack + busybox).** `keel init` symlinks `~/.keel/bin/{claude,codex,agy}` to the keel binary (Antigravity's CLI is `agy`), ahead of the real CLIs on PATH. Running `claude` runs keel (by `argv[0]`), which re-applies the latest hooks (idempotent, non-destructive via a `__keel` marker), then `exec`s the real `claude` — same PID, invisible in `ps`.
 2. **Hook handler.** At tool-use time the applied hooks call `keel run claude PreToolUse`; the policy engine returns allow / deny / ask (or defers).
 
 See **[docs/keel-architecture.html](docs/keel-architecture.html)** for the full picture.
@@ -32,7 +32,7 @@ keel is Rust, its behavior covered by the Rust test suite (unit + integration + 
 
 - ✅ **Hook engine** — `keel run <platform> <stage>`, the `autopermit` feature (files **and** full shell parsing), and Claude/Codex/Antigravity adapters.
 - ✅ **Transparent shim** — `keel init` / `apply` / `uninstall` / `doctor`: PATH-hijack symlinks, non-destructive `__keel` markers, `exec`s the real agent.
-- ✅ **All five features** — autopermit, branch-guard, secret-scan, audit-log (opt-in), session-banner. **40 tests (24 unit + 16 binary-level e2e), incl. edge-case & fault-tolerance; clippy/fmt clean.**
+- ✅ **All five features** — autopermit, branch-guard, secret-scan, audit-log (opt-in), session-banner. **53 Rust tests** (unit + integration, incl. edge-case & fault-tolerance) **plus a dockerized e2e** that installs the real Claude/Codex/`agy` CLIs and exercises the full lifecycle; clippy/fmt clean.
 
 ## Features
 
@@ -49,13 +49,17 @@ Verdicts aggregate **most-restrictive-wins**: `deny > ask > pass > allow`. Tunab
 ## Develop
 
 ```sh
-cargo test            # unit + golden-vector tests
+cargo test            # unit + integration tests
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 cargo build --release # → target/release/keel  (~1 MB)
 ```
 
-CI runs fmt + clippy + test + release build, plus the Python oracle tests, on every push and PR.
+For the full lifecycle against the real agent CLIs in a container, see **[docker/README.md](docker/README.md)**.
+
+CI runs fmt + clippy + test + release build, plus a **dockerized e2e** that installs the real
+Claude/Codex/Antigravity (`agy`) CLIs and runs keel's full install → attach → verdict → shim → uninstall
+lifecycle, on every push and PR. Releases are merge-triggered (bump `Cargo.toml`) — see [docs/RELEASING.md](docs/RELEASING.md).
 
 ## License
 
