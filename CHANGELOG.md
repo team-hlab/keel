@@ -12,6 +12,8 @@ the version — see [docs/RELEASING.md](docs/RELEASING.md).
   (`~/.gemini/config/hooks.json`) are unchanged. Busybox dispatch now derives shim names
   from the registered agents rather than a hard-coded list. `init`/`doctor` surface the
   shimmed binary (e.g. `antigravity (agy)`) so it's clear what keel actually wraps.
+  Verified Antigravity's global hooks path is `~/.gemini/config/hooks.json` (the path keel
+  already uses); the `agy` binary and `PreToolUse` event are confirmed too.
 
 ## [0.1.0] — 2026-06-25
 

@@ -32,6 +32,7 @@ pub const AGENTS: &[Agent] = &[
         name: "antigravity",
         // the real Antigravity CLI is `agy`; plain `antigravity` is the GUI IDE launcher
         bin: "agy",
+        // verified: Antigravity's global hooks live at ~/.gemini/config/hooks.json
         home: ".gemini",
         hooks_rel: "config/hooks.json",
         antigravity_shape: true,

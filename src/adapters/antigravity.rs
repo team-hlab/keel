@@ -1,4 +1,9 @@
-//! Google Antigravity adapter — best-effort, secondary sources (Antigravity 2.0). Verify live.
+//! Google Antigravity adapter (Antigravity 2.0, CLI `agy`).
+//!
+//! Verified: binary is `agy` (official install.sh); global hooks live at
+//! `~/.gemini/config/hooks.json` (see agent.rs); `PreToolUse` is a real event.
+//! Best-effort (docs render client-side, unconfirmed): the input field names
+//! (toolCall.args / workspacePaths) and the `{decision: ...}` output schema below.
 
 use serde_json::{json, Map, Value};
 
