@@ -93,6 +93,7 @@ jobs:
 
       - name: evidence → sticky PR comment
         if: always() && github.event_name == 'pull_request'
+        continue-on-error: true # posting evidence must never fail a passing e2e (e.g. fork PRs)
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
