@@ -28,20 +28,3 @@ jobs:
         run: cargo test
       - name: release build
         run: cargo build --release
-
-  # the Python implementation is the spec/oracle while the Rust port matures
-  python-oracle:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: reference/python
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: reference tests
-        run: |
-          for t in policy shell engine features install e2e no_external_deps; do
-            python tests/test_$t.py
-          done

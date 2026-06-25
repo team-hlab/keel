@@ -6,6 +6,13 @@ the version — see [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+### Changed
+- Ported the Python reference test suite (policy, shell, engine, features, install,
+  e2e, no-external-deps) into Rust unit/integration tests, retired the `python-oracle`
+  CI job, and removed `reference/python/`. The Rust source + tests are now the single
+  source of truth (53 tests). The `no_external_deps` guard becomes a `Cargo.toml`
+  dependency allowlist (`tests/deps.rs`).
+
 ### Fixed
 - Antigravity adapter now shims the real CLI binary **`agy`** (plain `antigravity` is the
   GUI IDE launcher, not a hookable CLI). Platform name (`antigravity`) and config path

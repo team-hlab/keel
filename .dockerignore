@@ -1,7 +1,6 @@
 target/
 .git/
 docs/
-reference/
 *.html
 **/__pycache__/
 **/*.pyc
