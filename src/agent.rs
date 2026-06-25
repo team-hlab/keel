@@ -71,7 +71,7 @@ pub fn detect(a: &Agent) -> bool {
     agent_home(a).exists() || find_on_path(a.bin, None).is_some()
 }
 
-fn is_executable(p: &Path) -> bool {
+pub fn is_executable(p: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     std::fs::metadata(p)
         .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
@@ -240,10 +240,16 @@ pub fn applied_count(a: &Agent) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::*;
+
+    // env mutation isn't thread-safe; serialize the tests that touch PATH/KEEL_HOME.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn apply_idempotent_and_clean() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let tmp = std::env::temp_dir().join(format!("keel-agent-{}", std::process::id()));
         std::fs::create_dir_all(tmp.join(".claude")).unwrap();
         std::env::set_var("KEEL_HOME", &tmp);
@@ -267,6 +273,7 @@ mod tests {
 
     #[test]
     fn find_on_path_respects_exclude() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let dir = std::env::temp_dir().join(format!("keel-path-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let exe = dir.join("faketool");

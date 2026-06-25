@@ -12,13 +12,15 @@ pub fn keel_bin_dir() -> PathBuf {
 }
 
 /// Shim mode. Re-apply hooks (best-effort, never block), then exec the real agent.
-/// Fork-bomb avoided by excluding the shim dir from PATH when resolving the binary.
 pub fn run_shim(name: &str) -> ! {
+    // Apply is best-effort and panic-isolated: nothing here may stop the real agent.
     if let Some(a) = agent::agent_by_bin(name) {
-        let _ = agent::apply(a);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| agent::apply(a)));
     }
-    let exclude = keel_bin_dir();
-    match agent::find_on_path(name, Some(exclude.as_path())) {
+    let self_exe = std::env::current_exe()
+        .ok()
+        .and_then(|p| std::fs::canonicalize(p).ok());
+    match find_real(name, &keel_bin_dir(), self_exe.as_deref()) {
         Some(real) => {
             use std::os::unix::process::CommandExt;
             let err = std::process::Command::new(&real)
@@ -28,10 +30,39 @@ pub fn run_shim(name: &str) -> ! {
             std::process::exit(127);
         }
         None => {
-            eprintln!("keel: real '{name}' not found on PATH (excluding the keel shim dir)");
+            eprintln!("keel: real '{name}' not found on PATH (only the keel shim)");
             std::process::exit(127);
         }
     }
+}
+
+/// Resolve the real agent binary. Skips the shim dir AND any candidate that canonicalizes
+/// to keel itself — a fork-bomb guard that holds even if the shim dir is listed oddly in PATH.
+fn find_real(name: &str, shim_dir: &Path, self_exe: Option<&Path>) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    find_real_in(std::env::split_paths(&path), name, shim_dir, self_exe)
+}
+
+fn find_real_in<I: Iterator<Item = PathBuf>>(
+    dirs: I,
+    name: &str,
+    shim_dir: &Path,
+    self_exe: Option<&Path>,
+) -> Option<PathBuf> {
+    for dir in dirs {
+        if dir == shim_dir {
+            continue;
+        }
+        let cand = dir.join(name);
+        if !agent::is_executable(&cand) {
+            continue;
+        }
+        if self_exe.is_some() && std::fs::canonicalize(&cand).ok().as_deref() == self_exe {
+            continue; // resolves to the keel binary — would re-invoke the shim (fork-bomb)
+        }
+        return Some(cand);
+    }
+    None
 }
 
 fn symlink_shim(a: &Agent, target: &Path) -> std::io::Result<()> {
@@ -130,4 +161,46 @@ pub fn doctor() -> i32 {
         );
     }
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mk_exec(dir: &Path, name: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(dir).unwrap();
+        let p = dir.join(name);
+        std::fs::write(&p, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        p
+    }
+
+    #[test]
+    fn find_real_skips_shim_dir() {
+        let base = std::env::temp_dir().join(format!("keel-fr-{}", std::process::id()));
+        let shim = base.join("shimbin");
+        let real = base.join("realbin");
+        mk_exec(&shim, "claude"); // the shim symlink stand-in
+        let real_claude = mk_exec(&real, "claude");
+        let dirs = vec![shim.clone(), real.clone()].into_iter();
+        // shim dir is skipped → resolves to the real one
+        assert_eq!(find_real_in(dirs, "claude", &shim, None), Some(real_claude));
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn find_real_self_exclusion_prevents_forkbomb() {
+        let base = std::env::temp_dir().join(format!("keel-fr2-{}", std::process::id()));
+        let real = base.join("realbin");
+        let claude = mk_exec(&real, "claude");
+        let canon = std::fs::canonicalize(&claude).unwrap();
+        // even though shim_dir doesn't match, the candidate IS keel itself → skipped → None
+        let dirs = vec![real.clone()].into_iter();
+        assert_eq!(
+            find_real_in(dirs, "claude", Path::new("/nonexistent"), Some(&canon)),
+            None
+        );
+        std::fs::remove_dir_all(&base).ok();
+    }
 }
