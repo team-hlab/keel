@@ -32,7 +32,7 @@ This repo is mid-port from a verified Python implementation to Rust (the Python 
 
 - ✅ **Hook engine** — `keel run <platform> <stage>`, the `autopermit` feature (files **and** full shell parsing), and Claude/Codex/Antigravity adapters. **Behavior verified 1:1 against the Python oracle.**
 - ✅ **Transparent shim** — `keel init` / `apply` / `uninstall` / `doctor`: PATH-hijack symlinks, non-destructive `__keel` markers, `exec`s the real agent.
-- ✅ **All five features** — autopermit, branch-guard, secret-scan, audit-log (opt-in), session-banner. **23 Rust tests; clippy/fmt clean.**
+- ✅ **All five features** — autopermit, branch-guard, secret-scan, audit-log (opt-in), session-banner. **34 tests (23 unit + 11 binary-level e2e); clippy/fmt clean.**
 
 ## Features
 
@@ -41,7 +41,7 @@ This repo is mid-port from a verified Python implementation to Rust (the Python 
 | **autopermit** | PreToolUse, PermissionRequest | permit non-secret reads + worktree writes + safe shell; `ask` secrets; `deny` out-of-worktree writes & catastrophic commands |
 | **branch-guard** | PreToolUse | `deny` mutating git on a protected branch |
 | **secret-scan** | PreToolUse | `ask` when a write's content looks like a credential |
-| **audit-log** | Pre/PostToolUse | append every call to JSONL (opt-in — it writes files) |
+| **audit-log** | PreToolUse | append every call to JSONL (opt-in — it writes files) |
 | **session-banner** | SessionStart | announce active features |
 
 Verdicts aggregate **most-restrictive-wins**: `deny > ask > pass > allow`. Tunable via `.keel.json`.

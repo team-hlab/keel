@@ -33,7 +33,7 @@ impl SecretScan {
 
 fn content(tool_input: &Value) -> String {
     let mut parts = Vec::new();
-    for k in ["content", "new_string", "new_str"] {
+    for k in ["content", "new_string", "new_str", "new_source"] {
         if let Some(s) = tool_input.get(k).and_then(Value::as_str) {
             parts.push(s.to_string());
         }

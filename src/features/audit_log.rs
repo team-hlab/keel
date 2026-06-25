@@ -8,7 +8,9 @@ use serde_json::{json, Map, Value};
 use crate::features::Feature;
 use crate::model::{Event, Verdict};
 
-const STAGES: &[&str] = &["PreToolUse", "PostToolUse"];
+// PreToolUse only: keel isn't registered as a PostToolUse hook (registering one by
+// default would no-op on every tool call when audit-log is off — wasteful).
+const STAGES: &[&str] = &["PreToolUse"];
 
 pub struct AuditLog {
     path: Option<String>,
