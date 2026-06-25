@@ -147,6 +147,7 @@ mod tests {
     #[test]
     fn other_tools_pass() {
         assert_eq!(dec("WebFetch", None), Decision::Pass);
+        assert_eq!(dec("Bash", Some("anything.sh")), Decision::Pass);
     }
 
     #[test]
@@ -157,5 +158,45 @@ mod tests {
         let r = write_allow_regexes("worktrees", "projects");
         assert!(is_write_allowed("/repo/worktrees/f/a", ROOT, &r));
         assert!(!is_write_allowed("/repo/projects/foo/main/a", ROOT, &r));
+    }
+
+    #[test]
+    fn sensitive_matrix() {
+        let p = pats();
+        for f in [
+            "id.key",
+            "server.pem",
+            "credentials.json",
+            "app-secrets.yaml",
+            "MY_SECRET.txt", // case-insensitive
+            "a/.env",
+        ] {
+            assert!(is_sensitive(Some(f), &p), "{f} should be sensitive");
+        }
+        for f in ["README.md", "App.kt", "config.json", "env.example.md"] {
+            assert!(!is_sensitive(Some(f), &p), "{f} should not be sensitive");
+        }
+        // basename-only: a "secret" directory must not match; a basename match must
+        assert!(!is_sensitive(Some("secret-stuff/notes.md"), &p));
+        assert!(is_sensitive(Some("any/dir/.env"), &p));
+    }
+
+    #[test]
+    fn write_allowed_nested_and_outside() {
+        let r = write_allow_regexes("worktrees", "projects");
+        for ok in [
+            "worktrees/x/a.md",
+            "projects/foo/worktrees/f/A.kt",
+            "projects/g/foo/worktrees/f/A.kt",
+            ".lens/s.md",
+        ] {
+            assert!(
+                is_write_allowed(&format!("/repo/{ok}"), ROOT, &r),
+                "{ok} should be allowed"
+            );
+        }
+        assert!(!is_write_allowed("/repo/projects/foo/main/A.kt", ROOT, &r));
+        assert!(!is_write_allowed("/repo/CLAUDE.md", ROOT, &r)); // root file
+        assert!(!is_write_allowed("/tmp/x.txt", ROOT, &r)); // outside root
     }
 }

@@ -92,10 +92,25 @@ mod tests {
             config: Value::Null,
         };
         assert!(f.evaluate(&event).is_none());
+        // a second event appends a second line (file_path captured for non-Bash tools)
+        let event2 = Event {
+            stage: "PreToolUse".into(),
+            tool: Some("Write".into()),
+            tool_input: json!({ "file_path": "a.txt" }),
+            cwd: Some("/repo".into()),
+            root: String::new(),
+            config: Value::Null,
+        };
+        assert!(f.evaluate(&event2).is_none());
+
         let txt = std::fs::read_to_string(&log).unwrap();
-        let rec: Value = serde_json::from_str(txt.trim()).unwrap();
+        let lines: Vec<&str> = txt.lines().collect();
+        assert_eq!(lines.len(), 2);
+        let rec: Value = serde_json::from_str(lines[0]).unwrap();
         assert_eq!(rec["tool"], "Bash");
         assert_eq!(rec["command"], "ls -la");
+        let rec2: Value = serde_json::from_str(lines[1]).unwrap();
+        assert_eq!(rec2["file_path"], "a.txt");
         std::fs::remove_file(&log).ok();
     }
 }

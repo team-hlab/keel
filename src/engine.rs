@@ -69,6 +69,19 @@ mod tests {
         }
     }
 
+    struct Abstain;
+    impl Feature for Abstain {
+        fn name(&self) -> &'static str {
+            "abstain"
+        }
+        fn stages(&self) -> &'static [&'static str] {
+            &["PreToolUse"]
+        }
+        fn evaluate(&self, _e: &Event) -> Option<Verdict> {
+            None
+        }
+    }
+
     fn ev() -> Event {
         Event {
             stage: "PreToolUse".into(),
@@ -82,12 +95,15 @@ mod tests {
 
     #[test]
     fn most_restrictive_wins() {
-        let v = aggregate(vec![
-            Verdict::new(Decision::Allow, "", ""),
-            Verdict::new(Decision::Deny, "", ""),
-            Verdict::new(Decision::Ask, "", ""),
-        ]);
-        assert_eq!(v.decision, Decision::Deny);
+        let mk = |ds: &[Decision]| {
+            aggregate(ds.iter().map(|d| Verdict::new(*d, "", "")).collect()).decision
+        };
+        assert_eq!(
+            mk(&[Decision::Allow, Decision::Deny, Decision::Ask]),
+            Decision::Deny
+        );
+        assert_eq!(mk(&[Decision::Allow, Decision::Ask]), Decision::Ask);
+        assert_eq!(mk(&[Decision::Allow, Decision::Pass]), Decision::Pass);
         assert_eq!(aggregate(vec![]).decision, Decision::Pass);
     }
 
@@ -98,6 +114,19 @@ mod tests {
             Box::new(Fixed(Decision::Deny, &["SessionStart"])),
         ];
         assert_eq!(run(&ev(), &feats).decision, Decision::Allow);
+    }
+
+    #[test]
+    fn run_aggregates_and_abstains() {
+        // two same-stage features aggregate most-restrictively
+        let feats: Vec<Box<dyn Feature>> = vec![
+            Box::new(Fixed(Decision::Allow, &["PreToolUse"])),
+            Box::new(Fixed(Decision::Deny, &["PreToolUse"])),
+        ];
+        assert_eq!(run(&ev(), &feats).decision, Decision::Deny);
+        // a lone abstaining (None-returning) feature → Pass
+        let only_abstain: Vec<Box<dyn Feature>> = vec![Box::new(Abstain)];
+        assert_eq!(run(&ev(), &only_abstain).decision, Decision::Pass);
     }
 
     #[test]

@@ -318,13 +318,13 @@ keel &lt;cmd&gt;               → <span class="ty">CLI</span>:
 │  ├─ <span class="h">adapters/</span>  <span class="g">claude · codex · antigravity</span>
 │  ├─ <span class="h">features/</span>  <span class="g">autopermit/{policy,shell} + …</span>
 │  └─ main.rs   <span class="g">busybox dispatch</span>
-├─ reference/python/  <span class="g"># spec + oracle → retiring</span>
+├─ tests/  <span class="g"># integration + dockerized e2e</span>
 └─ packaging/         <span class="g"># Homebrew formula</span></div>
   </div>
 
-  <div class="note" style="margin-top:14px"><b>Migration.</b> The verified Python build is now <span class="mono">reference/python/</span> —
-    the executable spec &amp; 76-test oracle. The Rust port is validated against it, then Python retires. Ports-and-adapters
-    ports verbatim; only the language changes.</div>
+  <div class="note" style="margin-top:14px"><b>Migration.</b> keel began as a verified Python implementation that served as the
+    executable spec &amp; oracle during the port. That coverage now lives in the Rust test suite (unit + integration +
+    a dockerized e2e against the real agent CLIs), and the Python oracle has been retired. Ports-and-adapters throughout.</div>
 
   <footer>keel · ports-and-adapters hook harness · Claude Code (verified) · Codex &amp; Antigravity (best-effort)</footer>
 </div>

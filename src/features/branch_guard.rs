@@ -127,6 +127,16 @@ mod tests {
         );
         assert!(g.evaluate(&event("git status", cwd)).is_none());
         assert!(g.evaluate(&event("ls", cwd)).is_none());
+        // non-Bash tools are ignored
+        assert!(g
+            .evaluate(&Event {
+                tool: Some("Read".into()),
+                ..event("ls", cwd)
+            })
+            .is_none());
+
+        // the head-branch helper reads .git/HEAD
+        assert_eq!(head_branch(Some(cwd)), Some("main".to_string()));
 
         // not protected when config narrows the set
         let g2 = BranchGuard::new(&json!({ "protected": ["release"] }));
