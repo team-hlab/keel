@@ -14,6 +14,10 @@ Homebrew tap. A merge with no version change is a no-op.
 - **Bump it:** `scripts/bump.sh <x.y.z>` updates `Cargo.toml` + `Cargo.lock`. Then
   add a `CHANGELOG.md` entry. The version becomes the release tag `vX.Y.Z` on merge.
 
+> **Caution:** a version bump publishes **whatever is currently on `develop`** — there is
+> no separate stabilization branch. Only bump the version when `develop` is release-ready
+> (ideally in a dedicated release PR).
+
 ## Cut a release
 
 1. Bump `version` in `Cargo.toml` (e.g. `0.1.0` → `0.1.1`) in your PR.

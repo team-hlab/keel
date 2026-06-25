@@ -11,6 +11,7 @@ keel.rb is then pushed to the tap (team-hlab/homebrew-keel → Formula/keel.rb).
 import hashlib
 import os
 import sys
+import time
 import urllib.request
 
 REPO = "team-hlab/keel"
@@ -22,11 +23,20 @@ TARGETS = {
 
 
 def sha256_of(url: str) -> str:
-    with urllib.request.urlopen(url) as r:  # noqa: S310 (trusted github release url)
-        h = hashlib.sha256()
-        for chunk in iter(lambda: r.read(65536), b""):
-            h.update(chunk)
-    return h.hexdigest()
+    # release assets can lag a moment after publish; retry with a bounded timeout
+    # so we never hang the job and survive a transient 404/network blip.
+    last = None
+    for attempt in range(5):
+        try:
+            with urllib.request.urlopen(url, timeout=30) as r:  # noqa: S310 (trusted github url)
+                h = hashlib.sha256()
+                for chunk in iter(lambda: r.read(65536), b""):
+                    h.update(chunk)
+            return h.hexdigest()
+        except Exception as e:  # noqa: BLE001
+            last = e
+            time.sleep(3 * (attempt + 1))
+    raise SystemExit(f"render_formula: gave up fetching {url}: {last}")
 
 
 def main() -> None:

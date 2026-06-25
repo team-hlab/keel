@@ -9,7 +9,12 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+# serialize releases so two quick merges can't race to publish the same tag
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   gate:
@@ -61,6 +66,8 @@ jobs:
     needs: [gate, build]
     if: needs.gate.outputs.release == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # only this job creates the tag + release
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -88,6 +95,9 @@ jobs:
           python-version: "3.12"
       - name: render formula
         run: python3 packaging/homebrew/render_formula.py "${{ needs.gate.outputs.version }}"
+      - name: warn if TAP_TOKEN unset
+        if: ${{ env.GH_TOKEN == '' }}
+        run: echo "::warning::TAP_TOKEN not set — formula rendered but NOT pushed. Update team-hlab/homebrew-keel manually (see docs/RELEASING.md)."
       - name: push to tap
         if: ${{ env.GH_TOKEN != '' }}
         run: |
