@@ -1,9 +1,9 @@
 # keel — dockerized e2e
 
 Runs keel's full install → attach → per-agent verdicts → transparent shim → uninstall
-lifecycle against the **real** Claude Code + Codex CLIs (Antigravity is stubbed — no
-headless install). Real agent *sessions* aren't run (no API key/OAuth in CI), so this
-covers everything that doesn't need one.
+lifecycle against the **real** Claude Code, Codex, and Antigravity (`agy`) CLIs — all
+install headlessly with offline `--version`. Real agent *sessions* aren't run (no API
+key/OAuth in CI), so this covers everything that doesn't need one.
 
 ## Pieces
 

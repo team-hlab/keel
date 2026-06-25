@@ -30,7 +30,9 @@ pub const AGENTS: &[Agent] = &[
     },
     Agent {
         name: "antigravity",
-        bin: "antigravity",
+        // the real Antigravity CLI is `agy`; plain `antigravity` is the GUI IDE launcher
+        bin: "agy",
+        // verified: Antigravity's global hooks live at ~/.gemini/config/hooks.json
         home: ".gemini",
         hooks_rel: "config/hooks.json",
         antigravity_shape: true,
@@ -56,6 +58,16 @@ pub fn home() -> PathBuf {
 
 pub fn agent_by_bin(bin: &str) -> Option<&'static Agent> {
     AGENTS.iter().find(|a| a.bin == bin)
+}
+
+/// Display label that surfaces the shimmed binary when it differs from the platform
+/// name (e.g. `antigravity (agy)`), so init/doctor show what keel actually wraps.
+pub fn label(a: &Agent) -> String {
+    if a.bin == a.name {
+        a.name.to_string()
+    } else {
+        format!("{} ({})", a.name, a.bin)
+    }
 }
 
 pub fn agent_home(a: &Agent) -> PathBuf {
@@ -270,6 +282,13 @@ mod tests {
 
     // env mutation isn't thread-safe; serialize the tests that touch PATH/KEEL_HOME.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn agy_is_the_antigravity_binary() {
+        assert_eq!(agent_by_bin("agy").unwrap().name, "antigravity");
+        // plain `antigravity` is the GUI IDE launcher — must NOT be shimmed
+        assert!(agent_by_bin("antigravity").is_none());
+    }
 
     #[test]
     fn apply_idempotent_and_clean() {

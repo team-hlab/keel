@@ -1,9 +1,8 @@
 name: docker-e2e
 
-# Builds keel, runs the full install/attach/shim/uninstall lifecycle in a container
-# against the REAL Claude/Codex CLIs (from the prebaked GHCR base; built inline if the
-# base isn't published yet) and a stubbed Antigravity. Evidence (log + PNG) is uploaded
-# as an artifact AND posted as a sticky PR comment.
+# Builds keel + the e2e base (real Claude/Codex/Antigravity `agy` CLIs) with registry+GHA
+# layer cache, then runs the full install/attach/shim/uninstall lifecycle in a container.
+# Evidence (log + PNG) is uploaded as an artifact AND posted as a sticky PR comment.
 on:
   pull_request:
   push:
@@ -27,7 +26,8 @@ jobs:
       - name: build keel
         run: cargo build --release
 
-      - name: login GHCR (for the prebaked base)
+      - uses: docker/setup-buildx-action@v3
+      - name: login GHCR (registry cache source)
         uses: docker/login-action@v3
         continue-on-error: true
         with:
@@ -35,15 +35,19 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
-      - name: get base image (pull prebaked, else build inline)
-        run: |
-          if docker pull ghcr.io/team-hlab/keel-e2e-base:latest 2>/dev/null; then
-            docker tag ghcr.io/team-hlab/keel-e2e-base:latest keel-e2e-base
-            echo "using prebaked base"
-          else
-            echo "base not published yet — building inline"
-            docker build -f docker/base.Dockerfile -t keel-e2e-base .
-          fi
+      # Build the base from THIS revision's Dockerfile (so base changes in a PR are
+      # tested), reusing unchanged layers from the published base + GHA cache → fast.
+      - name: build base image (cached)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/base.Dockerfile
+          tags: keel-e2e-base:latest
+          load: true
+          cache-from: |
+            type=registry,ref=ghcr.io/team-hlab/keel-e2e-base:latest
+            type=gha
+          cache-to: type=gha,mode=max
 
       - name: run lifecycle e2e
         shell: bash
@@ -52,14 +56,14 @@ jobs:
           docker run --rm \
             -v "$PWD/target/release/keel:/usr/local/bin/keel:ro" \
             -v "$PWD/docker/e2e.sh:/e2e.sh:ro" \
-            keel-e2e-base bash /e2e.sh 2>&1 | tee e2e-output.txt
+            keel-e2e-base:latest bash /e2e.sh 2>&1 | tee e2e-output.txt
 
       - name: evidence → step summary
         if: always()
         shell: bash
         run: |
           {
-            echo '### keel docker e2e — real Claude Code + Codex, stubbed Antigravity'
+            echo '### keel docker e2e — real Claude Code + Codex + Antigravity (agy)'
             echo '```'
             cat e2e-output.txt
             echo '```'
@@ -88,6 +92,7 @@ jobs:
 
       - name: evidence → sticky PR comment
         if: always() && github.event_name == 'pull_request'
+        continue-on-error: true # posting evidence must never fail a passing e2e (e.g. fork PRs)
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
@@ -95,7 +100,7 @@ jobs:
         shell: bash
         run: |
           marker='<!-- keel-e2e -->'
-          body=$(printf '%s\n## 🧪 keel docker e2e — real Claude + Codex\n\n```\n%s\n```\n\n📎 Full log + PNG photo: [run artifacts](%s)\n' \
+          body=$(printf '%s\n## 🧪 keel docker e2e — real Claude + Codex + Antigravity (agy)\n\n```\n%s\n```\n\n📎 Full log + PNG photo: [run artifacts](%s)\n' \
                  "$marker" "$(cat e2e-output.txt)" "$RUN_URL")
           cid=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" \
                   --jq ".[] | select(.body|startswith(\"$marker\")) | .id" | head -1)
