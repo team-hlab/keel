@@ -1,0 +1,25 @@
+name: docker-e2e
+
+# Builds keel + the real Claude/Codex CLIs in a container and runs the full
+# install/attach/shim/uninstall lifecycle (docker/e2e.sh). Heavier than the unit
+# CI, so it's its own workflow.
+on:
+  pull_request:
+  push:
+    branches: [develop]
+
+permissions:
+  contents: read
+concurrency:
+  group: docker-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docker-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: build image
+        run: docker build -f docker/e2e.Dockerfile -t keel-e2e .
+      - name: run lifecycle e2e
+        run: docker run --rm keel-e2e
