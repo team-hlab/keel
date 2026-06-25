@@ -1,28 +1,21 @@
-# Python
+# Rust
+/target/
+# Cargo.lock IS committed (binary crate)
+
+# Python reference (reference/python/)
 __pycache__/
 *.py[cod]
 *.egg-info/
-build/
-dist/
-.eggs/
-
-# Test / coverage
-.coverage
-.coverage.*
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-htmlcov/
 
-# keel runtime artifacts (audit logs etc.)
+# keel runtime artifacts
 .keel/
 
-# Environments
+# Environments / editor / OS
 .venv/
 venv/
-env/
-
-# Editor / OS
 .idea/
 .vscode/
 .DS_Store

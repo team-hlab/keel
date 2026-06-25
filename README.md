@@ -2,83 +2,60 @@
 
 **Write your agent's safety policy once, run it on any agent.**
 
-`keel` is a lean hook harness for first-party AI coding agents — **Claude Code**, **OpenAI Codex**, and **Google Antigravity**. It sits between the agent and its tools and, on every tool call, returns one of **auto-permit / auto-deny / ask-the-user**, decided by pluggable *features*.
+`keel` is a lean, single-binary hook harness for first-party AI coding agents — **Claude Code**, **OpenAI Codex**, **Google Antigravity**. Every tool call passes through keel, which **auto-permits** the safe, **auto-denies** the catastrophic, and **asks** you about the ambiguous.
 
-- **Zero external libraries** — pure Python stdlib + a tiny `sh` preflight. `dependencies = []`, enforced by a test.
-- **One policy, every agent** — the decision logic is a pure core; each agent is a thin *adapter*. The dependency arrow goes `keel → harness`, never the other way.
-- **Fails open** — a bug or a missing Python runtime never blocks the agent; it falls back to the platform's normal prompt.
-- **Extensible** — features implement a ~10-line interface. Add your org's rules without forking the engine.
+- **Single static binary** — Rust, ~1 MB, **zero runtime dependencies**.
+- **Busybox-style** — one binary, two modes: a transparent shim and the `keel` CLI.
+- **Transparent install** — `brew install keel && keel init` wires keel's hooks into every detected agent; you keep running `claude` exactly as before.
+- **Fails open** — a bug or a missing piece never blocks the agent.
+- **Extensible** — features are small compiled-in applets behind one trait.
 
-## Why
+## How it works
 
-Each agent has its own hook system, JSON schema, and config — but the *rule you want* ("don't write outside a worktree", "never read `.env` without asking", "block `git push --force`") is identical everywhere. Without keel you re-implement it three times in three dialects. And default agent permissions force a bad trade: prompt-for-everything (fatigue) or full-auto (unsafe). keel auto-permits the boring-safe, hard-denies the catastrophic, and only interrupts you for the genuinely ambiguous.
+1. **Shim (PATH hijack + busybox).** `keel init` symlinks `~/.keel/bin/{claude,codex,antigravity}` to the keel binary, ahead of the real CLIs on PATH. Running `claude` runs keel (by `argv[0]`), which re-applies the latest hooks (idempotent, non-destructive via a `__keel` marker), then `exec`s the real `claude` — same PID, invisible in `ps`.
+2. **Hook handler.** At tool-use time the applied hooks call `keel run claude PreToolUse`; the policy engine returns allow / deny / ask (or defers).
 
-You **don't** need keel if you use a single agent and its built-in allow/deny lists already cover you. It earns its place when you use more than one agent, your policy is path-/command-aware beyond static globs, or you want auditing and custom rules.
+See **[docs/keel-architecture.html](docs/keel-architecture.html)** for the full picture.
 
 ## Install
 
 ```sh
-pip install keel          # or: pipx install keel
+brew tap team-hlab/keel
+brew install keel
+keel init                 # attach to your installed agents
+brew upgrade keel         # update later
 ```
 
-Zero external dependencies, so it installs instantly and can't pull in anything surprising.
+## Status
 
-## Attach it to an agent
+This repo is mid-port from a verified Python implementation to Rust (the Python lives in `reference/python/` as the spec + test oracle, and is being retired).
 
-One command wires keel into the agent's hook config — idempotent and non-destructive (run it from your project root):
+- ✅ **Hook engine** — `keel run <platform> <stage>`, the `autopermit` feature (files **and** full shell parsing), and Claude/Codex/Antigravity adapters. 14 Rust tests; **behavior verified 1:1 against the Python oracle.**
+- 🚧 **Transparent shim** (`keel init` / `apply` / `uninstall`) and the remaining features (branch-guard, secret-scan, audit-log, session-banner) — in progress.
 
-```sh
-keel install claude          # → .claude/settings.json
-keel install codex           # → .codex/hooks.json
-keel install antigravity     # → .agents/hooks.json
-
-keel install claude --print  # preview the merged config, write nothing
-```
-
-It registers `keel run <platform> <stage>` for `PreToolUse`, `PermissionRequest`, and `SessionStart`. If `keel` may not be on PATH in the agent's environment, register the preflight shim instead: `keel install claude --command "sh /abs/path/keel/bin/keel.sh"`.
-
-See **[docs/INSTALL.md](docs/INSTALL.md)** for details and **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for the design. (Claude Code is verified; Codex/Antigravity adapters are best-effort against their ~May-2026 hook APIs — verify against live docs.)
-
-## Built-in features
+## Features
 
 | Feature | Stage(s) | What it does |
 |---|---|---|
-| **autopermit** | PreToolUse, PermissionRequest | auto-permit non-secret reads & worktree writes & safe shell; `ask` on secrets; `deny` writes outside a worktree and catastrophic commands |
-| **branch-guard** | PreToolUse | deny mutating `git` commands while HEAD is on a protected branch (`main`/`master`/`develop`) |
-| **secret-scan** | PreToolUse | `ask` when a write's *content* looks like a credential (AWS/GitHub/Slack tokens, PEM keys) |
-| **audit-log** | PreToolUse, PostToolUse | append every tool call + stage to a JSONL log (observer) |
-| **session-banner** | SessionStart | print active features + runtime status to stderr |
+| **autopermit** | PreToolUse, PermissionRequest | permit non-secret reads + worktree writes + safe shell; `ask` secrets; `deny` out-of-worktree writes & catastrophic commands |
+| branch-guard 🚧 | PreToolUse | `deny` mutating git on a protected branch |
+| secret-scan 🚧 | PreToolUse | `ask` when a write's content looks like a credential |
+| audit-log 🚧 | Pre/PostToolUse | append every call + verdict to JSONL |
+| session-banner 🚧 | SessionStart | announce active features |
 
-Verdicts aggregate **most-restrictive-wins**: `deny > ask > pass > allow`. Configure/disable features in `.keel.json`:
-
-```json
-{ "features": { "branch-guard": { "protected": ["main", "release"] },
-                "audit-log": { "enabled": false } } }
-```
-
-## Write a feature
-
-```python
-from keel.features.base import Feature
-from keel.core.model import Verdict, DENY
-
-class NoFridayDeploys(Feature):
-    name = "no-friday-deploys"
-    def stages(self): return {"PreToolUse"}
-    def evaluate(self, event):
-        if event.tool == "Bash" and "deploy" in (event.command or ""):
-            return Verdict(DENY, "no deploys on a Friday", self.name)
-        return None   # abstain
-```
+Verdicts aggregate **most-restrictive-wins**: `deny > ask > pass > allow`. Tunable via `.keel.json`.
 
 ## Develop
 
 ```sh
-pip install -e .                 # dev convenience only; users just `pip install keel`
-python -m pytest                 # (or run the stdlib unittest files directly)
-python tests/test_no_external_deps.py
+cargo test            # unit + golden-vector tests
+cargo clippy --all-targets -- -D warnings
+cargo fmt --check
+cargo build --release # → target/release/keel  (~1 MB)
 ```
+
+CI runs fmt + clippy + test + release build, plus the Python oracle tests, on every push and PR.
 
 ## License
 
-MIT © hubtwork
+MIT © team-hlab

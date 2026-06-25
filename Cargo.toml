@@ -1,0 +1,25 @@
+[package]
+name = "keel"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+description = "A lean, fast hook harness for first-party AI coding agents (permit/deny/ask)."
+license = "MIT"
+repository = "https://github.com/team-hlab/keel"
+
+[[bin]]
+name = "keel"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = "1"
+regex = "1"
+
+# Lean release binary (busybox-style): small + fast.
+# NOTE: keep unwinding (no panic="abort") — keel is a guard and must FAIL OPEN, which
+# relies on catch_unwind in the engine and the run path.
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+codegen-units = 1

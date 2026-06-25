@@ -5,7 +5,6 @@ on:
     branches: [develop, main]
   pull_request:
 
-# least privilege; cancel superseded runs on the same ref
 permissions:
   contents: read
 concurrency:
@@ -13,40 +12,36 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  lint:
+  rust:
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: format
+        run: cargo fmt --check
+      - name: clippy (deny warnings)
+        run: cargo clippy --all-targets -- -D warnings
+      - name: test
+        run: cargo test
+      - name: release build
+        run: cargo build --release
+
+  # the Python implementation is the spec/oracle while the Rust port matures
+  python-oracle:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: reference/python
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install dev tools
-        run: pip install -e ".[dev]"
-      - name: ruff check
-        run: ruff check --output-format=github .
-      - name: ruff format --check
-        run: ruff format --check .
-
-  test:
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.8", "3.10", "3.12", "3.13"]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-      - name: Install (editable, no runtime deps)
-        run: pip install -e .
-      - name: Unit + e2e tests
+      - name: reference tests
         run: |
-          python tests/test_policy.py
-          python tests/test_shell.py
-          python tests/test_engine.py
-          python tests/test_features.py
-          python tests/test_install.py
-          python tests/test_e2e.py
-      - name: No external dependencies
-        run: python tests/test_no_external_deps.py
+          for t in policy shell engine features install e2e no_external_deps; do
+            python tests/test_$t.py
+          done
