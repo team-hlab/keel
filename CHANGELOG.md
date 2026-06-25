@@ -6,6 +6,12 @@ the version — see [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+### Security
+- The Homebrew tap update no longer uses a long-lived PAT. `bump-tap` mints a
+  **short-lived GitHub App token scoped to only `team-hlab/homebrew-keel`** (auto-revoked
+  per run), configured via the `release` environment (`TAP_APP_ID` var +
+  `TAP_APP_PRIVATE_KEY` secret). See [docs/RELEASING.md](docs/RELEASING.md).
+
 ### Fixed
 - Antigravity adapter now shims the real CLI binary **`agy`** (plain `antigravity` is the
   GUI IDE launcher, not a hookable CLI). Platform name (`antigravity`) and config path
