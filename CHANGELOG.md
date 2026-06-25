@@ -6,6 +6,8 @@ the version — see [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-06-25
+
 ### Changed
 - Ported the Python reference test suite (policy, shell, engine, features, install,
   e2e, no-external-deps) into Rust unit/integration tests, retired the `python-oracle`
