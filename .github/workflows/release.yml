@@ -80,14 +80,15 @@ jobs:
           files: dist/*
           generate_release_notes: true
 
-  # Update the Homebrew tap. Requires a TAP_TOKEN secret (PAT with Contents:write on
-  # team-hlab/homebrew-keel) — the push is skipped if it's unset.
+  # Update the Homebrew tap. Mints a SHORT-LIVED token from a GitHub App scoped to only
+  # team-hlab/homebrew-keel (no standing PAT) — see docs/RELEASING.md. Config lives in the
+  # `release` environment: var TAP_APP_ID + secret TAP_APP_PRIVATE_KEY. If the App isn't
+  # configured the formula is rendered but the push is skipped (fail-safe).
   bump-tap:
     needs: [gate, release]
     if: needs.gate.outputs.release == 'true'
     runs-on: ubuntu-latest
-    env:
-      GH_TOKEN: ${{ secrets.TAP_TOKEN }}
+    environment: release
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -95,18 +96,30 @@ jobs:
           python-version: "3.12"
       - name: render formula
         run: python3 packaging/homebrew/render_formula.py "${{ needs.gate.outputs.version }}"
-      - name: warn if TAP_TOKEN unset
-        if: ${{ env.GH_TOKEN == '' }}
-        run: echo "::warning::TAP_TOKEN not set — formula rendered but NOT pushed. Update team-hlab/homebrew-keel manually (see docs/RELEASING.md)."
+      - name: mint short-lived tap token (GitHub App)
+        id: tap
+        if: ${{ vars.TAP_APP_ID != '' }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.TAP_APP_ID }}
+          private-key: ${{ secrets.TAP_APP_PRIVATE_KEY }}
+          owner: team-hlab
+          repositories: homebrew-keel
+      - name: warn if tap App unconfigured
+        if: ${{ vars.TAP_APP_ID == '' }}
+        run: echo "::warning::Tap GitHub App not configured — formula rendered but NOT pushed. See docs/RELEASING.md."
       - name: push to tap
-        if: ${{ env.GH_TOKEN != '' }}
+        if: ${{ vars.TAP_APP_ID != '' }}
+        env:
+          GH_TOKEN: ${{ steps.tap.outputs.token }}
+          SLUG: ${{ steps.tap.outputs.app-slug }}
         run: |
           git clone "https://x-access-token:${GH_TOKEN}@github.com/team-hlab/homebrew-keel.git" tap
           mkdir -p tap/Formula
           cp packaging/homebrew/keel.rb tap/Formula/keel.rb
           cd tap
-          git config user.name "keel-release"
-          git config user.email "keel-release@users.noreply.github.com"
+          git config user.name "${SLUG}[bot]"
+          git config user.email "${SLUG}[bot]@users.noreply.github.com"
           git add Formula/keel.rb
           git commit -m "keel ${{ needs.gate.outputs.version }}" || exit 0
           git push

@@ -28,16 +28,23 @@ Homebrew tap. A merge with no version change is a no-op.
    - **release** — tag `vX.Y.Z` + GitHub Release with the tarballs.
    - **bump-tap** — render `Formula/keel.rb` and push it to `team-hlab/homebrew-keel`.
 
-## One-time setup: `TAP_TOKEN`
+## One-time setup: tap GitHub App
 
-The tap is a separate repo, so the workflow needs a cross-repo token to push the
-formula (`GITHUB_TOKEN` can't write to another repo):
+The tap is a separate repo, so the release needs cross-repo write (`GITHUB_TOKEN` can't
+write to another repo). Rather than a long-lived PAT, `bump-tap` mints a **short-lived
+token from a GitHub App** scoped to only `team-hlab/homebrew-keel` and auto-revoked when
+the job ends — no standing credential.
 
-1. Create a fine-grained PAT with **Contents: write** on `team-hlab/homebrew-keel`.
-2. `gh secret set TAP_TOKEN --repo team-hlab/keel --body <PAT>`
+1. Create a **GitHub App** (owner `team-hlab`) with **Repository permissions → Contents:
+   Read and write**. Generate and download a **private key** (`.pem`).
+2. **Install** the App on `team-hlab/homebrew-keel` only.
+3. In `team-hlab/keel` → Settings → Environments → **`release`**, add:
+   - **Variable** `TAP_APP_ID` = the App's numeric ID (not secret).
+   - **Secret** `TAP_APP_PRIVATE_KEY` = the `.pem` contents.
+   - (Recommended) a deployment protection rule limiting it to the `develop` branch.
 
-Until it's set, releases still build and publish — only the tap push is skipped.
-You can then update the tap by hand:
+Until the App is configured, releases still build and publish — only the tap push is
+skipped (a `::warning::` is logged). You can update the tap by hand meanwhile:
 
 ```sh
 python3 packaging/homebrew/render_formula.py <version>   # writes packaging/homebrew/keel.rb
