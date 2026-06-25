@@ -1,9 +1,8 @@
 name: docker-e2e
 
-# Builds keel, runs the full install/attach/shim/uninstall lifecycle in a container
-# against the REAL Claude/Codex CLIs (from the prebaked GHCR base; built inline if the
-# base isn't published yet) and a stubbed Antigravity. Evidence (log + PNG) is uploaded
-# as an artifact AND posted as a sticky PR comment.
+# Builds keel + the e2e base (real Claude/Codex/Antigravity `agy` CLIs) with registry+GHA
+# layer cache, then runs the full install/attach/shim/uninstall lifecycle in a container.
+# Evidence (log + PNG) is uploaded as an artifact AND posted as a sticky PR comment.
 on:
   pull_request:
   push:
