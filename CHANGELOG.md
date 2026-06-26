@@ -6,6 +6,13 @@ the version — see [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+## [0.1.2] — 2026-06-26
+
+### Changed
+- Centralized cross-cutting path/marker/env constants (`.keel`, `__keel`, `KEEL_*`,
+  `.keel.json`, `.git`, the `keel run …` hook-command template) into `src/consts.rs`. No
+  behavior change.
+
 ### Fixed
 - **Codex adapter**: stop emitting `permissionDecision: "ask"` at PreToolUse — it isn't a
   valid Codex value there (Codex confirms via the separate `PermissionRequest` event), so
