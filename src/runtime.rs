@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
 
+use crate::consts;
+
 /// Read + parse the hook payload from stdin. None on any error.
 pub fn read_input() -> Option<Value> {
     use std::io::Read;
@@ -45,7 +47,7 @@ fn as_string(p: PathBuf) -> String {
 /// Resolve the project root: $KEEL_ROOT, else walk up to the nearest `.git`
 /// (back-tracking from a worktree `.git` file), else the cwd.
 pub fn find_root(cwd: Option<&str>) -> String {
-    if let Ok(env) = std::env::var("KEEL_ROOT") {
+    if let Ok(env) = std::env::var(consts::ENV_ROOT) {
         if !env.is_empty() {
             return as_string(canon(Path::new(&env)));
         }
@@ -56,7 +58,7 @@ pub fn find_root(cwd: Option<&str>) -> String {
     });
     let mut cur = base.clone();
     loop {
-        let git = cur.join(".git");
+        let git = cur.join(consts::GIT_DIR);
         if git.exists() {
             if git.is_file() {
                 if let Ok(content) = std::fs::read_to_string(&git) {
@@ -76,10 +78,10 @@ pub fn find_root(cwd: Option<&str>) -> String {
 
 /// Load keel config: $KEEL_CONFIG, else `<root>/.keel.json`, else `{}`.
 pub fn load_config(root: &str) -> Value {
-    let path = std::env::var("KEEL_CONFIG")
+    let path = std::env::var(consts::ENV_CONFIG)
         .ok()
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| format!("{root}/.keel.json"));
+        .unwrap_or_else(|| format!("{root}/{}", consts::CONFIG_FILE));
     std::fs::read_to_string(&path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())

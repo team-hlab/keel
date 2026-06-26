@@ -5,6 +5,7 @@
 
 mod adapters;
 mod agent;
+mod consts;
 mod engine;
 mod features;
 mod model;

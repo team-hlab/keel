@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Map, Value};
 
+use crate::consts;
+
 pub struct Agent {
     pub name: &'static str,      // platform name used in `keel run <name> ...`
     pub bin: &'static str,       // the real CLI binary keel shims
@@ -54,7 +56,7 @@ const STAGES: &[(&str, bool)] = &[
 
 /// $KEEL_HOME (test/override) or $HOME.
 pub fn home() -> PathBuf {
-    if let Some(h) = std::env::var_os("KEEL_HOME") {
+    if let Some(h) = std::env::var_os(consts::ENV_HOME) {
         return PathBuf::from(h);
     }
     std::env::var_os("HOME")
@@ -167,7 +169,7 @@ fn apply_hooks_style(cfg: &mut Value, name: &str) -> bool {
         .or_insert_with(|| Value::Object(Map::new()));
     let hooks = ensure_obj(hooks);
     for (stage, needs_matcher) in STAGES {
-        let cmd = format!("keel run {name} {stage}");
+        let cmd = consts::hook_command(name, stage);
         let arr_v = hooks.entry(*stage).or_insert_with(|| Value::Array(vec![]));
         if !arr_v.is_array() {
             *arr_v = Value::Array(vec![]);
@@ -176,13 +178,11 @@ fn apply_hooks_style(cfg: &mut Value, name: &str) -> bool {
         if arr.iter().any(|e| entry_has_cmd(e, &cmd)) {
             continue;
         }
-        let mut entry =
-            json!({ "__keel": true, "hooks": [ { "type": "command", "command": cmd } ] });
+        let mut entry = json!({ "hooks": [ { "type": "command", "command": cmd } ] });
+        let obj = entry.as_object_mut().unwrap();
+        obj.insert(consts::KEEL_MARKER.into(), Value::Bool(true));
         if *needs_matcher {
-            entry
-                .as_object_mut()
-                .unwrap()
-                .insert("matcher".into(), json!(TOOL_MATCHER));
+            obj.insert("matcher".into(), json!(TOOL_MATCHER));
         }
         arr.push(entry);
         changed = true;
@@ -194,7 +194,7 @@ fn apply_antigravity(cfg: &mut Value, name: &str) -> bool {
     let mut changed = false;
     let root = ensure_obj(cfg);
     for (stage, _) in STAGES {
-        let cmd = format!("keel run {name} {stage}");
+        let cmd = consts::hook_command(name, stage);
         let arr_v = root.entry(*stage).or_insert_with(|| Value::Array(vec![]));
         if !arr_v.is_array() {
             *arr_v = Value::Array(vec![]);
@@ -206,7 +206,12 @@ fn apply_antigravity(cfg: &mut Value, name: &str) -> bool {
         {
             continue;
         }
-        arr.push(json!({ "command": cmd, "__keel": true }));
+        let mut entry = json!({ "command": cmd });
+        entry
+            .as_object_mut()
+            .unwrap()
+            .insert(consts::KEEL_MARKER.into(), Value::Bool(true));
+        arr.push(entry);
         changed = true;
     }
     changed
@@ -240,7 +245,7 @@ pub fn apply(a: &Agent) -> std::io::Result<bool> {
 fn strip_keel(map: &mut Map<String, Value>) {
     for v in map.values_mut() {
         if let Some(arr) = v.as_array_mut() {
-            arr.retain(|e| e.get("__keel").and_then(Value::as_bool) != Some(true));
+            arr.retain(|e| e.get(consts::KEEL_MARKER).and_then(Value::as_bool) != Some(true));
         }
     }
 }
@@ -279,7 +284,7 @@ pub fn applied_count(a: &Agent) -> usize {
             obj.values()
                 .filter_map(Value::as_array)
                 .flatten()
-                .filter(|e| e.get("__keel").and_then(Value::as_bool) == Some(true))
+                .filter(|e| e.get(consts::KEEL_MARKER).and_then(Value::as_bool) == Some(true))
                 .count()
         })
         .unwrap_or(0)
@@ -306,7 +311,7 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         let tmp = std::env::temp_dir().join(format!("keel-agent-{}", std::process::id()));
         std::fs::create_dir_all(tmp.join(".claude")).unwrap();
-        std::env::set_var("KEEL_HOME", &tmp);
+        std::env::set_var(consts::ENV_HOME, &tmp);
 
         let claude = agent_by_bin("claude").unwrap();
         assert!(apply(claude).unwrap()); // first apply changes
@@ -315,13 +320,13 @@ mod tests {
 
         let txt = std::fs::read_to_string(hooks_path(claude)).unwrap();
         assert!(txt.contains("keel run claude PreToolUse"));
-        assert!(txt.contains("__keel"));
+        assert!(txt.contains(consts::KEEL_MARKER));
         assert!(txt.contains(TOOL_MATCHER));
 
         clean(claude).unwrap();
         assert_eq!(applied_count(claude), 0);
 
-        std::env::remove_var("KEEL_HOME");
+        std::env::remove_var(consts::ENV_HOME);
         std::fs::remove_dir_all(&tmp).ok();
     }
 
@@ -347,7 +352,7 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("keel-det-{}", std::process::id()));
         std::fs::create_dir_all(tmp.join(".gemini")).unwrap(); // shared with the Gemini CLI
         std::fs::create_dir_all(tmp.join(".claude")).unwrap();
-        std::env::set_var("KEEL_HOME", &tmp);
+        std::env::set_var(consts::ENV_HOME, &tmp);
         let orig_path = std::env::var_os("PATH");
         std::env::set_var("PATH", tmp.join("nobin")); // no agent binaries on PATH
 
@@ -360,7 +365,7 @@ mod tests {
             Some(p) => std::env::set_var("PATH", p),
             None => std::env::remove_var("PATH"),
         }
-        std::env::remove_var("KEEL_HOME");
+        std::env::remove_var(consts::ENV_HOME);
         std::fs::remove_dir_all(&tmp).ok();
     }
 
@@ -369,7 +374,7 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         let tmp = std::env::temp_dir().join(format!("keel-mal-{}", std::process::id()));
         std::fs::create_dir_all(tmp.join(".claude")).unwrap();
-        std::env::set_var("KEEL_HOME", &tmp);
+        std::env::set_var(consts::ENV_HOME, &tmp);
 
         let claude = agent_by_bin("claude").unwrap();
         let path = hooks_path(claude);
@@ -381,7 +386,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), garbage);
         assert_eq!(applied_count(claude), 0);
 
-        std::env::remove_var("KEEL_HOME");
+        std::env::remove_var(consts::ENV_HOME);
         std::fs::remove_dir_all(&tmp).ok();
     }
 
@@ -390,7 +395,7 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         let tmp = std::env::temp_dir().join(format!("keel-shape-c-{}", std::process::id()));
         std::fs::create_dir_all(tmp.join(".claude")).unwrap();
-        std::env::set_var("KEEL_HOME", &tmp);
+        std::env::set_var(consts::ENV_HOME, &tmp);
 
         let claude = agent_by_bin("claude").unwrap();
         apply(claude).unwrap();
@@ -408,7 +413,7 @@ mod tests {
         );
         assert!(hooks["SessionStart"][0].get("matcher").is_none());
 
-        std::env::remove_var("KEEL_HOME");
+        std::env::remove_var(consts::ENV_HOME);
         std::fs::remove_dir_all(&tmp).ok();
     }
 
@@ -417,7 +422,7 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         let tmp = std::env::temp_dir().join(format!("keel-shape-ca-{}", std::process::id()));
         std::fs::create_dir_all(&tmp).unwrap();
-        std::env::set_var("KEEL_HOME", &tmp);
+        std::env::set_var(consts::ENV_HOME, &tmp);
 
         let codex = agent_by_bin("codex").unwrap();
         apply(codex).unwrap();
@@ -438,7 +443,7 @@ mod tests {
             "keel run antigravity PreToolUse"
         );
 
-        std::env::remove_var("KEEL_HOME");
+        std::env::remove_var(consts::ENV_HOME);
         std::fs::remove_dir_all(&tmp).ok();
     }
 
@@ -447,7 +452,7 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         let tmp = std::env::temp_dir().join(format!("keel-merge-{}", std::process::id()));
         std::fs::create_dir_all(tmp.join(".claude")).unwrap();
-        std::env::set_var("KEEL_HOME", &tmp);
+        std::env::set_var(consts::ENV_HOME, &tmp);
 
         let claude = agent_by_bin("claude").unwrap();
         let path = hooks_path(claude);
@@ -466,7 +471,7 @@ mod tests {
             .iter()
             .any(|e| e["hooks"][0]["command"] == "keel run claude PreToolUse")); // keel added
 
-        std::env::remove_var("KEEL_HOME");
+        std::env::remove_var(consts::ENV_HOME);
         std::fs::remove_dir_all(&tmp).ok();
     }
 }

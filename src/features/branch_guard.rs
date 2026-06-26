@@ -6,6 +6,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde_json::Value;
 
+use crate::consts;
 use crate::features::Feature;
 use crate::model::{Decision, Event, Verdict};
 
@@ -43,7 +44,7 @@ fn head_branch(cwd: Option<&str>) -> Option<String> {
     };
     let mut cur = std::fs::canonicalize(&start).unwrap_or(start);
     loop {
-        let git = cur.join(".git");
+        let git = cur.join(consts::GIT_DIR);
         if git.exists() {
             let head_path = if git.is_file() {
                 let content = std::fs::read_to_string(&git).ok()?;
@@ -112,7 +113,7 @@ mod tests {
     #[test]
     fn denies_on_protected_branch() {
         let tmp = std::env::temp_dir().join(format!("keel-bg-{}", std::process::id()));
-        std::fs::create_dir_all(tmp.join(".git")).unwrap();
+        std::fs::create_dir_all(tmp.join(consts::GIT_DIR)).unwrap();
         std::fs::write(tmp.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
         let cwd = tmp.to_str().unwrap();
 

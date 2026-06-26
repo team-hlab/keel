@@ -5,6 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Map, Value};
 
+use crate::consts;
 use crate::features::Feature;
 use crate::model::{Event, Verdict};
 
@@ -63,10 +64,14 @@ impl Feature for AuditLog {
                 json!(cmd.chars().take(500).collect::<String>()),
             );
         }
-        let path = self
-            .path
-            .clone()
-            .unwrap_or_else(|| format!("{}/.keel/audit.log", event.root));
+        let path = self.path.clone().unwrap_or_else(|| {
+            format!(
+                "{}/{}/{}",
+                event.root,
+                consts::KEEL_DIR,
+                consts::AUDIT_LOG_NAME
+            )
+        });
         let _ = append_line(&path, &Value::Object(rec).to_string()); // logging must never block
         None // observer: no verdict
     }
