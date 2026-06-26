@@ -6,8 +6,10 @@
 //! accepts `deny` (and `allow`, version-dependent); **`ask` is NOT valid at PreToolUse** —
 //! Codex mediates confirmation via the separate `PermissionRequest` event, so we defer it.
 //! Best-effort: the `PermissionRequest` output schema (undocumented at time of writing).
-//! Gap: Codex's `Bash` tool is shell-gated, but its `apply_patch` edit tool isn't in keel's
-//! write-tool set, so file-write gating doesn't apply to it yet (same shape as Antigravity).
+//! `apply_patch` (Codex's edit tool) is normalized to a Write — first patched path + the
+//! patch text — so file gating + secret-scan apply, and it's in the hook matcher so Codex
+//! fires keel for it. Multi-file patches: the path policy checks the first file; secret-scan
+//! sees all content.
 
 use serde_json::{json, Map, Value};
 
@@ -16,20 +18,53 @@ use crate::runtime::find_root;
 
 pub fn parse(raw: &Value, stage: &str) -> Event {
     let cwd = raw.get("cwd").and_then(Value::as_str).map(String::from);
+    let tool = raw
+        .get("tool_name")
+        .and_then(Value::as_str)
+        .map(String::from);
+    let input = raw
+        .get("tool_input")
+        .cloned()
+        .unwrap_or(Value::Object(Map::new()));
+    let (tool, tool_input) = normalize(tool, input);
     Event {
         stage: stage.to_string(),
-        tool: raw
-            .get("tool_name")
-            .and_then(Value::as_str)
-            .map(String::from),
-        tool_input: raw
-            .get("tool_input")
-            .cloned()
-            .unwrap_or(Value::Object(Map::new())),
+        tool,
+        tool_input,
         cwd: cwd.clone(),
         root: find_root(cwd.as_deref()),
         config: Value::Null,
     }
+}
+
+/// `apply_patch` carries the whole V4A patch in `tool_input.command`. Surface the first
+/// patched file path + the patch text under keel's neutral keys so the file policy and
+/// secret-scan apply. A patch may touch several files; the path policy checks the first,
+/// while secret-scan sees the entire patch.
+fn normalize(tool: Option<String>, input: Value) -> (Option<String>, Value) {
+    if tool.as_deref() != Some("apply_patch") {
+        return (tool, input);
+    }
+    let patch = input.get("command").and_then(Value::as_str).unwrap_or("");
+    let mut m = Map::new();
+    if let Some(p) = first_patch_path(patch) {
+        m.insert("file_path".into(), json!(p));
+    }
+    m.insert("content".into(), json!(patch));
+    (Some("Write".to_string()), Value::Object(m))
+}
+
+/// First file path in a V4A patch (`*** Add/Update/Delete File: <path>`).
+fn first_patch_path(patch: &str) -> Option<String> {
+    for line in patch.lines() {
+        let t = line.trim_start();
+        for marker in ["*** Add File: ", "*** Update File: ", "*** Delete File: "] {
+            if let Some(p) = t.strip_prefix(marker) {
+                return Some(p.trim().to_string());
+            }
+        }
+    }
+    None
 }
 
 pub fn render(verdict: &Verdict, stage: &str) -> String {
@@ -72,6 +107,16 @@ mod tests {
         let e = parse(&raw, "PreToolUse");
         assert_eq!(e.tool.as_deref(), Some("Bash"));
         assert_eq!(e.command(), Some("ls"));
+    }
+
+    #[test]
+    fn apply_patch_normalized_to_write() {
+        let patch = "*** Begin Patch\n*** Update File: projects/foo/main/a.py\n@@\n+token = \"AKIAIOSFODNN7EXAMPLE\"\n*** End Patch";
+        let raw = json!({"tool_name":"apply_patch","tool_input":{"command":patch},"cwd":"/r"});
+        let e = parse(&raw, "PreToolUse");
+        assert_eq!(e.tool.as_deref(), Some("Write")); // gated as a write
+        assert_eq!(e.file_path(), Some("projects/foo/main/a.py")); // path from the patch
+        assert!(e.tool_input.get("content").is_some()); // full patch → secret-scan sees it
     }
 
     #[test]

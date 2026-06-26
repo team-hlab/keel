@@ -47,7 +47,7 @@ pub const AGENTS: &[Agent] = &[
     },
 ];
 
-const TOOL_MATCHER: &str = "Read|Glob|Grep|Edit|MultiEdit|Write|NotebookEdit|Bash";
+const TOOL_MATCHER: &str = "Read|Glob|Grep|Edit|MultiEdit|Write|NotebookEdit|Bash|apply_patch";
 const STAGES: &[(&str, bool)] = &[
     ("PreToolUse", true),
     ("PermissionRequest", true),
