@@ -6,6 +6,21 @@ the version — see [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+### Fixed
+- **Codex adapter**: stop emitting `permissionDecision: "ask"` at PreToolUse — it isn't a
+  valid Codex value there (Codex confirms via the separate `PermissionRequest` event), so
+  `ask` now defers. Input/output schema verified against the official docs.
+- **Antigravity adapter**: normalize the `run_command` shell tool (command in
+  `args.CommandLine`) into keel's neutral model so the shell policy actually runs —
+  previously destructive shell commands passed unchecked on Antigravity. Output
+  `{decision,reason}` + `toolCall`/`workspacePaths` input confirmed.
+- **Antigravity detection** now requires the `agy` binary on PATH — a bare `~/.gemini`
+  (shared with the Gemini CLI) no longer makes keel attach to an Antigravity that isn't
+  installed. Claude/Codex still detect via their exclusive config dirs.
+
+### Added
+- `docs/CONFIG.md` — reference for `.keel.json` (feature toggles + per-feature options).
+
 ## [0.1.1] — 2026-06-25
 
 ### Changed
