@@ -14,6 +14,9 @@ the version — see [docs/RELEASING.md](docs/RELEASING.md).
   `args.CommandLine`) into keel's neutral model so the shell policy actually runs —
   previously destructive shell commands passed unchecked on Antigravity. Output
   `{decision,reason}` + `toolCall`/`workspacePaths` input confirmed.
+- **Antigravity detection** now requires the `agy` binary on PATH — a bare `~/.gemini`
+  (shared with the Gemini CLI) no longer makes keel attach to an Antigravity that isn't
+  installed. Claude/Codex still detect via their exclusive config dirs.
 
 ### Added
 - `docs/CONFIG.md` — reference for `.keel.json` (feature toggles + per-feature options).

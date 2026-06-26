@@ -8,9 +8,10 @@ use serde_json::{json, Map, Value};
 pub struct Agent {
     pub name: &'static str,      // platform name used in `keel run <name> ...`
     pub bin: &'static str,       // the real CLI binary keel shims
-    pub home: &'static str,      // config dir under $HOME (detection)
+    pub home: &'static str,      // config dir under $HOME (detection + hooks)
     pub hooks_rel: &'static str, // hooks file relative to the home dir
     pub antigravity_shape: bool, // registration shape
+    pub home_is_exclusive: bool, // is `home` unique to this agent? (else require the binary)
 }
 
 pub const AGENTS: &[Agent] = &[
@@ -20,6 +21,7 @@ pub const AGENTS: &[Agent] = &[
         home: ".claude",
         hooks_rel: "settings.json",
         antigravity_shape: false,
+        home_is_exclusive: true, // ~/.claude is Claude Code's alone
     },
     Agent {
         name: "codex",
@@ -27,6 +29,7 @@ pub const AGENTS: &[Agent] = &[
         home: ".codex",
         hooks_rel: "hooks.json",
         antigravity_shape: false,
+        home_is_exclusive: true, // ~/.codex is Codex's alone
     },
     Agent {
         name: "antigravity",
@@ -36,6 +39,9 @@ pub const AGENTS: &[Agent] = &[
         home: ".gemini",
         hooks_rel: "config/hooks.json",
         antigravity_shape: true,
+        // ~/.gemini is shared with the Gemini CLI, so it doesn't imply Antigravity —
+        // require the `agy` binary on PATH to detect it.
+        home_is_exclusive: false,
     },
 ];
 
@@ -78,9 +84,14 @@ pub fn hooks_path(a: &Agent) -> PathBuf {
     agent_home(a).join(a.hooks_rel)
 }
 
-/// An agent is present if its config dir exists or its CLI is on PATH.
+/// An agent is present if its CLI is on PATH, or — for agents whose config dir is theirs
+/// alone — that dir exists. Antigravity's `~/.gemini` is shared with the Gemini CLI, so it
+/// requires the `agy` binary; a bare `~/.gemini` must not imply Antigravity.
 pub fn detect(a: &Agent) -> bool {
-    agent_home(a).exists() || find_on_path(a.bin, None).is_some()
+    if a.home_is_exclusive && agent_home(a).exists() {
+        return true;
+    }
+    find_on_path(a.bin, None).is_some()
 }
 
 pub fn is_executable(p: &Path) -> bool {
@@ -328,6 +339,29 @@ mod tests {
         assert!(find_on_path("faketool", None).is_some());
         assert!(find_on_path("faketool", Some(dir.as_path())).is_none()); // excluded
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn antigravity_needs_binary_not_just_gemini_dir() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tmp = std::env::temp_dir().join(format!("keel-det-{}", std::process::id()));
+        std::fs::create_dir_all(tmp.join(".gemini")).unwrap(); // shared with the Gemini CLI
+        std::fs::create_dir_all(tmp.join(".claude")).unwrap();
+        std::env::set_var("KEEL_HOME", &tmp);
+        let orig_path = std::env::var_os("PATH");
+        std::env::set_var("PATH", tmp.join("nobin")); // no agent binaries on PATH
+
+        // a bare ~/.gemini must NOT imply Antigravity (the dir is shared)
+        assert!(!detect(agent_by_bin("agy").unwrap()));
+        // but an exclusive config dir does imply its agent
+        assert!(detect(agent_by_bin("claude").unwrap()));
+
+        match orig_path {
+            Some(p) => std::env::set_var("PATH", p),
+            None => std::env::remove_var("PATH"),
+        }
+        std::env::remove_var("KEEL_HOME");
+        std::fs::remove_dir_all(&tmp).ok();
     }
 
     #[test]
