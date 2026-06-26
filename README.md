@@ -44,7 +44,7 @@ keel is Rust, its behavior covered by the Rust test suite (unit + integration + 
 | **audit-log** | PreToolUse | append every call to JSONL (opt-in — it writes files) |
 | **session-banner** | SessionStart | announce active features |
 
-Verdicts aggregate **most-restrictive-wins**: `deny > ask > pass > allow`. Tunable via `.keel.json`.
+Verdicts aggregate **most-restrictive-wins**: `deny > ask > pass > allow`. Tunable via `.keel.json` — see **[docs/CONFIG.md](docs/CONFIG.md)**.
 
 ## Develop
 
