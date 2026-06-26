@@ -6,10 +6,13 @@
 use std::path::{Path, PathBuf};
 
 use crate::agent::{self, Agent, AGENTS};
+use crate::consts;
 use crate::registry;
 
 pub fn keel_bin_dir() -> PathBuf {
-    agent::home().join(".keel").join("bin")
+    agent::home()
+        .join(consts::KEEL_DIR)
+        .join(consts::SHIM_BIN_SUBDIR)
 }
 
 /// Shim mode. Re-apply hooks (best-effort, never block), then exec the real agent.
@@ -131,7 +134,7 @@ pub fn uninstall() -> i32 {
         let _ = agent::clean(a);
         std::fs::remove_file(keel_bin_dir().join(a.bin)).ok();
     }
-    std::fs::remove_dir_all(agent::home().join(".keel")).ok();
+    std::fs::remove_dir_all(agent::home().join(consts::KEEL_DIR)).ok();
     println!("keel uninstall: removed shims and keel-tagged hooks.");
     0
 }
