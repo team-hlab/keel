@@ -71,10 +71,11 @@ jobs:
 
       - name: evidence → render PNG (runner ImageMagick)
         if: always()
+        continue-on-error: true # evidence only — an apt/runner hiccup must never fail a passing e2e
         shell: bash
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends imagemagick fonts-dejavu-core
+          sudo apt-get update -qq || true # tolerate a single bad third-party repo (e.g. azure-cli 403)
+          sudo apt-get install -y -qq --no-install-recommends imagemagick fonts-dejavu-core || true
           convert -size 1200x -background '#11121a' -fill '#c8d3f5' \
             -font /usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf -pointsize 17 \
             -bordercolor '#11121a' -border 28 \
