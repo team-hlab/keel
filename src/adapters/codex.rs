@@ -6,6 +6,8 @@
 //! accepts `deny` (and `allow`, version-dependent); **`ask` is NOT valid at PreToolUse** —
 //! Codex mediates confirmation via the separate `PermissionRequest` event, so we defer it.
 //! Best-effort: the `PermissionRequest` output schema (undocumented at time of writing).
+//! Gap: Codex's `Bash` tool is shell-gated, but its `apply_patch` edit tool isn't in keel's
+//! write-tool set, so file-write gating doesn't apply to it yet (same shape as Antigravity).
 
 use serde_json::{json, Map, Value};
 
