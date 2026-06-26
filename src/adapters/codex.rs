@@ -1,4 +1,11 @@
-//! OpenAI Codex adapter — best-effort vs developers.openai.com/codex/hooks (~May 2026). Verify live.
+//! OpenAI Codex adapter.
+//!
+//! Verified (developers.openai.com/codex/hooks): input is snake_case — `tool_name`,
+//! `tool_input.command`, `hook_event_name`; hooks live in `~/.codex/hooks.json`; tool names
+//! (`Bash`, …) match Claude's. PreToolUse output `hookSpecificOutput.permissionDecision`
+//! accepts `deny` (and `allow`, version-dependent); **`ask` is NOT valid at PreToolUse** —
+//! Codex mediates confirmation via the separate `PermissionRequest` event, so we defer it.
+//! Best-effort: the `PermissionRequest` output schema (undocumented at time of writing).
 
 use serde_json::{json, Map, Value};
 
@@ -38,7 +45,9 @@ pub fn render(verdict: &Verdict, stage: &str) -> String {
         };
     }
     match d {
-        Decision::Allow | Decision::Deny | Decision::Ask => json!({
+        // `ask` isn't a valid PreToolUse decision in Codex — defer it (and Pass) so the
+        // tool proceeds to Codex's own PermissionRequest flow, where keel's hook runs.
+        Decision::Allow | Decision::Deny => json!({
             "hookSpecificOutput": {
                 "hookEventName": stage,
                 "permissionDecision": d.as_str(),
@@ -46,6 +55,35 @@ pub fn render(verdict: &Verdict, stage: &str) -> String {
             }
         })
         .to_string(),
-        Decision::Pass => json!({}).to_string(),
+        Decision::Ask | Decision::Pass => json!({}).to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parse_reads_snake_case() {
+        let raw = json!({"tool_name":"Bash","tool_input":{"command":"ls"},"cwd":"/x"});
+        let e = parse(&raw, "PreToolUse");
+        assert_eq!(e.tool.as_deref(), Some("Bash"));
+        assert_eq!(e.command(), Some("ls"));
+    }
+
+    #[test]
+    fn pretooluse_deny_renders_but_ask_defers() {
+        let deny = render(&Verdict::new(Decision::Deny, "no", "t"), "PreToolUse");
+        assert!(deny.contains("\"permissionDecision\":\"deny\""));
+        // ask is not a PreToolUse value in Codex → defer (empty object), never emit it
+        assert_eq!(
+            render(&Verdict::new(Decision::Ask, "", "t"), "PreToolUse"),
+            "{}"
+        );
+        assert_eq!(
+            render(&Verdict::new(Decision::Pass, "", "t"), "PreToolUse"),
+            "{}"
+        );
     }
 }
