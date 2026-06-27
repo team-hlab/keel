@@ -4,8 +4,10 @@
 //! input is `toolCall.name` + `toolCall.args` (camelCase) with `workspacePaths`; the
 //! shell tool is `run_command` with the command in `args.CommandLine`; output is
 //! `{"decision": "allow"|"deny"|"ask", "reason": …}` and a non-zero exit = deny (so keel
-//! always emits JSON + exits 0). Best-effort: write-tool arg field names (unconfirmed) —
-//! so file-write gating doesn't yet apply on Antigravity; shell gating does.
+//! always emits JSON + exits 0). Write tools are normalized too — `write_to_file`,
+//! `replace_file_content`, `multi_replace_file_content` — so file gating + secret-scan apply.
+//! (Whether the agent FIRES the hook for these depends on its hooks.json matcher/registration,
+//! verified separately.)
 
 use serde_json::{json, Map, Value};
 
@@ -28,18 +30,9 @@ pub fn parse(raw: &Value, stage: &str) -> Event {
         .cloned()
         .or_else(|| tool_call.and_then(|t| t.get("args")).cloned())
         .unwrap_or(Value::Object(Map::new()));
-    // Normalize Antigravity's tool taxonomy into keel's neutral model so the engine's
-    // policy applies. Verified: the shell tool is `run_command`, command in `args.CommandLine`.
-    let (tool, tool_input) = match raw_tool.as_deref() {
-        Some("run_command") => {
-            let mut m = Map::new();
-            if let Some(c) = raw_input.get("CommandLine").and_then(Value::as_str) {
-                m.insert("command".into(), json!(c));
-            }
-            (Some("Bash".to_string()), Value::Object(m))
-        }
-        _ => (raw_tool, raw_input),
-    };
+    // Map Antigravity's tool taxonomy onto keel's neutral model so the engine's policy +
+    // secret-scan apply (see `normalize`).
+    let (tool, tool_input) = normalize(raw_tool, raw_input);
     let cwd = raw
         .get("cwd")
         .and_then(Value::as_str)
@@ -58,6 +51,64 @@ pub fn parse(raw: &Value, stage: &str) -> Event {
         root: find_root(cwd.as_deref()),
         config: Value::Null,
     }
+}
+
+/// Map an Antigravity tool call onto keel's neutral model. Verified arg names: `run_command`
+/// (`CommandLine`), `write_to_file` (`TargetFile`/`CodeContent`), `replace_file_content`
+/// (`TargetFile`/`ReplacementContent`), `multi_replace_file_content` (`TargetFile` +
+/// `ReplacementChunks[].ReplacementContent`).
+fn normalize(tool: Option<String>, args: Value) -> (Option<String>, Value) {
+    let s = |k: &str| args.get(k).and_then(Value::as_str);
+    let mapped = match tool.as_deref() {
+        Some("run_command") => Some(("Bash", arg_obj(&[("command", s("CommandLine"))]))),
+        Some("write_to_file") => Some((
+            "Write",
+            arg_obj(&[
+                ("file_path", s("TargetFile")),
+                ("content", s("CodeContent")),
+            ]),
+        )),
+        Some("replace_file_content") => Some((
+            "Edit",
+            arg_obj(&[
+                ("file_path", s("TargetFile")),
+                ("new_string", s("ReplacementContent")),
+            ]),
+        )),
+        Some("multi_replace_file_content") => {
+            let mut m = Map::new();
+            if let Some(p) = s("TargetFile") {
+                m.insert("file_path".into(), json!(p));
+            }
+            let edits: Vec<Value> = args
+                .get("ReplacementChunks")
+                .and_then(Value::as_array)
+                .map(|cs| {
+                    cs.iter()
+                        .filter_map(|c| c.get("ReplacementContent").and_then(Value::as_str))
+                        .map(|x| json!({ "new_string": x }))
+                        .collect()
+                })
+                .unwrap_or_default();
+            m.insert("edits".into(), Value::Array(edits));
+            Some(("MultiEdit", Value::Object(m)))
+        }
+        _ => None,
+    };
+    match mapped {
+        Some((t, input)) => (Some(t.to_string()), input),
+        None => (tool, args),
+    }
+}
+
+fn arg_obj(pairs: &[(&str, Option<&str>)]) -> Value {
+    let mut m = Map::new();
+    for (k, v) in pairs {
+        if let Some(val) = v {
+            m.insert((*k).to_string(), json!(val));
+        }
+    }
+    Value::Object(m)
 }
 
 pub fn render(verdict: &Verdict, _stage: &str) -> String {
@@ -81,6 +132,51 @@ mod tests {
         assert_eq!(e.tool.as_deref(), Some("Bash")); // so the shell policy runs
         assert_eq!(e.command(), Some("rm -rf /"));
         assert_eq!(e.cwd.as_deref(), Some("/repo"));
+    }
+
+    #[test]
+    fn normalizes_write_tools() {
+        // write_to_file → Write{file_path, content}
+        let e = parse(
+            &json!({"toolCall":{"name":"write_to_file","args":{"TargetFile":"/r/x.py","CodeContent":"k=1"}}}),
+            "PreToolUse",
+        );
+        assert_eq!(e.tool.as_deref(), Some("Write"));
+        assert_eq!(e.file_path(), Some("/r/x.py"));
+        assert_eq!(
+            e.tool_input.get("content").and_then(|v| v.as_str()),
+            Some("k=1")
+        );
+
+        // replace_file_content → Edit{file_path, new_string}
+        let e = parse(
+            &json!({"toolCall":{"name":"replace_file_content","args":{"TargetFile":"/r/y.py","ReplacementContent":"z=2"}}}),
+            "PreToolUse",
+        );
+        assert_eq!(e.tool.as_deref(), Some("Edit"));
+        assert_eq!(e.file_path(), Some("/r/y.py"));
+        assert_eq!(
+            e.tool_input.get("new_string").and_then(|v| v.as_str()),
+            Some("z=2")
+        );
+
+        // multi_replace_file_content → MultiEdit{file_path, edits:[{new_string}]}
+        let e = parse(
+            &json!({"toolCall":{"name":"multi_replace_file_content","args":{"TargetFile":"/r/z.py","ReplacementChunks":[{"ReplacementContent":"a"},{"ReplacementContent":"b"}]}}}),
+            "PreToolUse",
+        );
+        assert_eq!(e.tool.as_deref(), Some("MultiEdit"));
+        assert_eq!(e.file_path(), Some("/r/z.py"));
+        let edits = e
+            .tool_input
+            .get("edits")
+            .and_then(|v| v.as_array())
+            .unwrap();
+        assert_eq!(edits.len(), 2);
+        assert_eq!(
+            edits[0].get("new_string").and_then(|v| v.as_str()),
+            Some("a")
+        );
     }
 
     #[test]

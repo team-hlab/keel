@@ -6,6 +6,16 @@ the version — see [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+### Fixed
+- **Write/edit-tool gating on Codex and Antigravity** (#13). The adapters now normalize
+  agent-native file tools into keel's neutral model so `autopermit` + `secret-scan` apply:
+  Codex `apply_patch` (V4A patch → first patched path + full patch text; matcher updated so
+  Codex fires keel for it); Antigravity `write_to_file` / `replace_file_content` /
+  `multi_replace_file_content` (`TargetFile` + `CodeContent`/`ReplacementContent`).
+  Previously these bypassed write gating. A multi-file `apply_patch` is evaluated
+  **most-restrictively across all patched files** (`file_paths`) — a protected write can't
+  slip through behind a safe one — and secret-scan sees the whole patch.
+
 ## [0.1.2] — 2026-06-26
 
 ### Changed
