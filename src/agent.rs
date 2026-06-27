@@ -12,7 +12,8 @@ pub struct Agent {
     pub bin: &'static str,       // the real CLI binary keel shims
     pub home: &'static str,      // config dir under $HOME (detection + hooks)
     pub hooks_rel: &'static str, // hooks file relative to the home dir
-    pub antigravity_shape: bool, // registration shape
+    pub hooks_container: &'static str, // top-level key the per-stage hooks nest under
+    pub tool_matcher: &'static str, // regex matched against the tool name
     pub home_is_exclusive: bool, // is `home` unique to this agent? (else require the binary)
 }
 
@@ -22,7 +23,8 @@ pub const AGENTS: &[Agent] = &[
         bin: "claude",
         home: ".claude",
         hooks_rel: "settings.json",
-        antigravity_shape: false,
+        hooks_container: "hooks",
+        tool_matcher: TOOL_MATCHER,
         home_is_exclusive: true, // ~/.claude is Claude Code's alone
     },
     Agent {
@@ -30,7 +32,8 @@ pub const AGENTS: &[Agent] = &[
         bin: "codex",
         home: ".codex",
         hooks_rel: "hooks.json",
-        antigravity_shape: false,
+        hooks_container: "hooks",
+        tool_matcher: TOOL_MATCHER,
         home_is_exclusive: true, // ~/.codex is Codex's alone
     },
     Agent {
@@ -40,14 +43,21 @@ pub const AGENTS: &[Agent] = &[
         // verified: Antigravity's global hooks live at ~/.gemini/config/hooks.json
         home: ".gemini",
         hooks_rel: "config/hooks.json",
-        antigravity_shape: true,
+        // Antigravity nests hooks under a namespace key (not "hooks"), with a matcher on
+        // its own tool names.
+        hooks_container: "keel",
+        tool_matcher: ANTIGRAVITY_MATCHER,
         // ~/.gemini is shared with the Gemini CLI, so it doesn't imply Antigravity —
         // require the `agy` binary on PATH to detect it.
         home_is_exclusive: false,
     },
 ];
 
+// Claude/Codex tool names (`apply_patch` is Codex's edit tool; Claude never sends it).
 const TOOL_MATCHER: &str = "Read|Glob|Grep|Edit|MultiEdit|Write|NotebookEdit|Bash|apply_patch";
+// Antigravity's own tool names — the ones keel gates.
+const ANTIGRAVITY_MATCHER: &str =
+    "run_command|write_to_file|replace_file_content|multi_replace_file_content";
 const STAGES: &[(&str, bool)] = &[
     ("PreToolUse", true),
     ("PermissionRequest", true),
@@ -161,16 +171,21 @@ fn entry_has_cmd(e: &Value, cmd: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn apply_hooks_style(cfg: &mut Value, name: &str) -> bool {
+/// Merge keel's hooks into the agent's config under `a.hooks_container` → `<stage>` →
+/// `[{matcher?, hooks:[{type:"command", command}], __keel}]`. Claude/Codex use the `"hooks"`
+/// container; Antigravity uses its `"keel"` namespace. Idempotent + non-destructive.
+fn apply_hooks(cfg: &mut Value, a: &Agent) -> bool {
     let mut changed = false;
     let root = ensure_obj(cfg);
-    let hooks = root
-        .entry("hooks")
+    let container = root
+        .entry(a.hooks_container)
         .or_insert_with(|| Value::Object(Map::new()));
-    let hooks = ensure_obj(hooks);
+    let container = ensure_obj(container);
     for (stage, needs_matcher) in STAGES {
-        let cmd = consts::hook_command(name, stage);
-        let arr_v = hooks.entry(*stage).or_insert_with(|| Value::Array(vec![]));
+        let cmd = consts::hook_command(a.name, stage);
+        let arr_v = container
+            .entry(*stage)
+            .or_insert_with(|| Value::Array(vec![]));
         if !arr_v.is_array() {
             *arr_v = Value::Array(vec![]);
         }
@@ -182,35 +197,8 @@ fn apply_hooks_style(cfg: &mut Value, name: &str) -> bool {
         let obj = entry.as_object_mut().unwrap();
         obj.insert(consts::KEEL_MARKER.into(), Value::Bool(true));
         if *needs_matcher {
-            obj.insert("matcher".into(), json!(TOOL_MATCHER));
+            obj.insert("matcher".into(), json!(a.tool_matcher));
         }
-        arr.push(entry);
-        changed = true;
-    }
-    changed
-}
-
-fn apply_antigravity(cfg: &mut Value, name: &str) -> bool {
-    let mut changed = false;
-    let root = ensure_obj(cfg);
-    for (stage, _) in STAGES {
-        let cmd = consts::hook_command(name, stage);
-        let arr_v = root.entry(*stage).or_insert_with(|| Value::Array(vec![]));
-        if !arr_v.is_array() {
-            *arr_v = Value::Array(vec![]);
-        }
-        let arr = arr_v.as_array_mut().unwrap();
-        if arr
-            .iter()
-            .any(|e| e.get("command").and_then(Value::as_str) == Some(cmd.as_str()))
-        {
-            continue;
-        }
-        let mut entry = json!({ "command": cmd });
-        entry
-            .as_object_mut()
-            .unwrap()
-            .insert(consts::KEEL_MARKER.into(), Value::Bool(true));
         arr.push(entry);
         changed = true;
     }
@@ -231,11 +219,7 @@ pub fn apply(a: &Agent) -> std::io::Result<bool> {
             return Ok(false);
         }
     };
-    let changed = if a.antigravity_shape {
-        apply_antigravity(&mut cfg, a.name)
-    } else {
-        apply_hooks_style(&mut cfg, a.name)
-    };
+    let changed = apply_hooks(&mut cfg, a);
     if changed {
         write_json(&path, &cfg)?;
     }
@@ -260,12 +244,11 @@ pub fn clean(a: &Agent) -> std::io::Result<()> {
         Some(v) => v,
         None => return Ok(()), // unparseable — leave it untouched
     };
-    if a.antigravity_shape {
-        if let Some(m) = cfg.as_object_mut() {
-            strip_keel(m);
-        }
-    } else if let Some(h) = cfg.get_mut("hooks").and_then(Value::as_object_mut) {
-        strip_keel(h);
+    if let Some(c) = cfg
+        .get_mut(a.hooks_container)
+        .and_then(Value::as_object_mut)
+    {
+        strip_keel(c);
     }
     write_json(&path, &cfg)
 }
@@ -273,12 +256,7 @@ pub fn clean(a: &Agent) -> std::io::Result<()> {
 /// Count keel-tagged hook entries currently applied (for `status`/`doctor`).
 pub fn applied_count(a: &Agent) -> usize {
     let cfg = read_json(&hooks_path(a));
-    let container = if a.antigravity_shape {
-        Some(&cfg)
-    } else {
-        cfg.get("hooks")
-    };
-    container
+    cfg.get(a.hooks_container)
         .and_then(Value::as_object)
         .map(|obj| {
             obj.values()
@@ -437,11 +415,15 @@ mod tests {
         apply(antig).unwrap();
         let cfg: Value =
             serde_json::from_str(&std::fs::read_to_string(hooks_path(antig)).unwrap()).unwrap();
-        // flat shape: command sits directly on the stage entry (no "hooks" nesting)
+        // namespaced shape: cfg.keel.<stage>[0].hooks[0].command, with a tool matcher
         assert_eq!(
-            cfg["PreToolUse"][0]["command"],
+            cfg["keel"]["PreToolUse"][0]["hooks"][0]["command"],
             "keel run antigravity PreToolUse"
         );
+        assert!(cfg["keel"]["PreToolUse"][0]
+            .get("matcher")
+            .and_then(|m| m.as_str())
+            .is_some_and(|m| m.contains("run_command")));
 
         std::env::remove_var(consts::ENV_HOME);
         std::fs::remove_dir_all(&tmp).ok();

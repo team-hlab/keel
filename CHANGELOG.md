@@ -7,6 +7,11 @@ the version — see [docs/RELEASING.md](docs/RELEASING.md).
 ## [Unreleased]
 
 ### Fixed
+- **Antigravity hook registration** (#16): keel was writing a flat `~/.gemini/config/hooks.json`
+  (`stage → [{command}]`) that Antigravity wouldn't fire. Now uses the real shape — a `keel`
+  namespace → stage → `[{matcher, hooks:[{type, command}], __keel}]` with a matcher on
+  Antigravity's tool names — so the agent actually invokes keel. Unified the registration
+  across all three agents (`hooks_container` + `tool_matcher` per agent).
 - **Write/edit-tool gating on Codex and Antigravity** (#13). The adapters now normalize
   agent-native file tools into keel's neutral model so `autopermit` + `secret-scan` apply:
   Codex `apply_patch` (V4A patch → first patched path + full patch text; matcher updated so

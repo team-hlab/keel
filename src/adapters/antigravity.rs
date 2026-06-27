@@ -6,8 +6,8 @@
 //! `{"decision": "allow"|"deny"|"ask", "reason": …}` and a non-zero exit = deny (so keel
 //! always emits JSON + exits 0). Write tools are normalized too — `write_to_file`,
 //! `replace_file_content`, `multi_replace_file_content` — so file gating + secret-scan apply.
-//! (Whether the agent FIRES the hook for these depends on its hooks.json matcher/registration,
-//! verified separately.)
+//! keel registers under the `keel` namespace in `~/.gemini/config/hooks.json` with a matcher
+//! on these tool names (see agent.rs), so Antigravity fires keel for them.
 
 use serde_json::{json, Map, Value};
 
