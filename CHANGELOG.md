@@ -6,6 +6,8 @@ the version — see [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+## [0.1.3] — 2026-06-27
+
 ### Fixed
 - **Antigravity hook registration** (#16): keel was writing a flat `~/.gemini/config/hooks.json`
   (`stage → [{command}]`) that Antigravity wouldn't fire. Now uses the real shape — a `keel`
