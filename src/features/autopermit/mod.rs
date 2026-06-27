@@ -50,6 +50,21 @@ impl AutoPermit {
     }
 }
 
+/// Paths to gate for a file event: the multi-path `file_paths` list if present (e.g. Codex
+/// apply_patch touches several files), else the single `file_path`.
+fn write_paths(event: &Event) -> Vec<String> {
+    if let Some(arr) = event.tool_input.get("file_paths").and_then(Value::as_array) {
+        return arr
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
+    }
+    event
+        .file_path()
+        .map(|p| vec![p.to_string()])
+        .unwrap_or_default()
+}
+
 fn reason(d: Decision) -> &'static str {
     match d {
         Decision::Allow => "safe read / worktree write / read-only command",
@@ -80,17 +95,39 @@ impl Feature for AutoPermit {
                 &resolve,
             )
         } else {
-            let abs = event
-                .file_path()
-                .map(|fp| resolve_target(event.cwd.as_deref(), fp));
-            policy::decide(
-                event.tool.as_deref(),
-                event.file_path(),
-                abs.as_deref(),
-                &event.root,
-                &self.patterns,
-                &self.regexes,
-            )
+            let paths = write_paths(event);
+            if paths.is_empty() {
+                let abs = event
+                    .file_path()
+                    .map(|fp| resolve_target(event.cwd.as_deref(), fp));
+                policy::decide(
+                    event.tool.as_deref(),
+                    event.file_path(),
+                    abs.as_deref(),
+                    &event.root,
+                    &self.patterns,
+                    &self.regexes,
+                )
+            } else {
+                // multi-path tools (e.g. Codex apply_patch) → most-restrictive across files,
+                // so a protected file can't slip through behind a safe one.
+                paths.iter().fold(Decision::Allow, |worst, p| {
+                    let abs = resolve_target(event.cwd.as_deref(), p);
+                    let d = policy::decide(
+                        event.tool.as_deref(),
+                        Some(p),
+                        Some(&abs),
+                        &event.root,
+                        &self.patterns,
+                        &self.regexes,
+                    );
+                    if d.rank() > worst.rank() {
+                        d
+                    } else {
+                        worst
+                    }
+                })
+            }
         };
         match decision {
             Decision::Pass => None,

@@ -6,10 +6,9 @@
 //! accepts `deny` (and `allow`, version-dependent); **`ask` is NOT valid at PreToolUse** —
 //! Codex mediates confirmation via the separate `PermissionRequest` event, so we defer it.
 //! Best-effort: the `PermissionRequest` output schema (undocumented at time of writing).
-//! `apply_patch` (Codex's edit tool) is normalized to a Write — first patched path + the
-//! patch text — so file gating + secret-scan apply, and it's in the hook matcher so Codex
-//! fires keel for it. Multi-file patches: the path policy checks the first file; secret-scan
-//! sees all content.
+//! `apply_patch` (Codex's edit tool) is normalized to a Write — ALL patched paths
+//! (`file_paths`) + the patch text — so file gating (most-restrictive across files) and
+//! secret-scan both apply, and it's in the hook matcher so Codex fires keel for it.
 
 use serde_json::{json, Map, Value};
 
@@ -37,34 +36,40 @@ pub fn parse(raw: &Value, stage: &str) -> Event {
     }
 }
 
-/// `apply_patch` carries the whole V4A patch in `tool_input.command`. Surface the first
-/// patched file path + the patch text under keel's neutral keys so the file policy and
-/// secret-scan apply. A patch may touch several files; the path policy checks the first,
-/// while secret-scan sees the entire patch.
+/// `apply_patch` carries the whole V4A patch in `tool_input.command`. Surface every patched
+/// path (`file_paths`, with `file_path` = the first for display) + the patch text under keel's
+/// neutral keys so the file policy (most-restrictive across files) and secret-scan both apply.
 fn normalize(tool: Option<String>, input: Value) -> (Option<String>, Value) {
     if tool.as_deref() != Some("apply_patch") {
         return (tool, input);
     }
     let patch = input.get("command").and_then(Value::as_str).unwrap_or("");
+    let paths = patch_paths(patch);
     let mut m = Map::new();
-    if let Some(p) = first_patch_path(patch) {
-        m.insert("file_path".into(), json!(p));
+    if let Some(first) = paths.first() {
+        m.insert("file_path".into(), json!(first));
+    }
+    // ALL patched files — autopermit evaluates each (most-restrictive), so a protected file
+    // can't slip through by listing a safe file first.
+    if !paths.is_empty() {
+        m.insert("file_paths".into(), json!(paths));
     }
     m.insert("content".into(), json!(patch));
     (Some("Write".to_string()), Value::Object(m))
 }
 
-/// First file path in a V4A patch (`*** Add/Update/Delete File: <path>`).
-fn first_patch_path(patch: &str) -> Option<String> {
+/// Every file path in a V4A patch (`*** Add/Update/Delete File: <path>`), in order.
+fn patch_paths(patch: &str) -> Vec<String> {
+    let mut out = Vec::new();
     for line in patch.lines() {
         let t = line.trim_start();
         for marker in ["*** Add File: ", "*** Update File: ", "*** Delete File: "] {
             if let Some(p) = t.strip_prefix(marker) {
-                return Some(p.trim().to_string());
+                out.push(p.trim().to_string());
             }
         }
     }
-    None
+    out
 }
 
 pub fn render(verdict: &Verdict, stage: &str) -> String {
@@ -111,11 +116,18 @@ mod tests {
 
     #[test]
     fn apply_patch_normalized_to_write() {
-        let patch = "*** Begin Patch\n*** Update File: projects/foo/main/a.py\n@@\n+token = \"AKIAIOSFODNN7EXAMPLE\"\n*** End Patch";
+        // multi-file patch: a safe file first, a protected one second — both must be surfaced
+        let patch = "*** Begin Patch\n*** Add File: worktrees/f/ok.py\n+a=1\n*** Update File: projects/foo/main/evil.py\n@@\n+b=2\n*** End Patch";
         let raw = json!({"tool_name":"apply_patch","tool_input":{"command":patch},"cwd":"/r"});
         let e = parse(&raw, "PreToolUse");
         assert_eq!(e.tool.as_deref(), Some("Write")); // gated as a write
-        assert_eq!(e.file_path(), Some("projects/foo/main/a.py")); // path from the patch
+        let paths = e
+            .tool_input
+            .get("file_paths")
+            .and_then(|v| v.as_array())
+            .unwrap();
+        assert_eq!(paths.len(), 2); // ALL patched files, not just the first
+        assert_eq!(paths[1].as_str(), Some("projects/foo/main/evil.py"));
         assert!(e.tool_input.get("content").is_some()); // full patch → secret-scan sees it
     }
 

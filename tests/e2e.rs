@@ -260,8 +260,9 @@ fn write_tools_gated_on_codex_and_antigravity() {
     let root = project_root();
     let r = root.to_str().unwrap();
 
-    // Codex apply_patch editing a protected path → deny (path parsed out of the patch)
-    let patch = "*** Begin Patch\n*** Update File: projects/foo/main/a.py\n@@\n+x=1\n*** End Patch";
+    // Codex apply_patch: a SAFE worktree file first, a PROTECTED file second → deny
+    // (the protected write must not slip through behind the safe one).
+    let patch = "*** Begin Patch\n*** Add File: worktrees/f/ok.py\n+a=1\n*** Update File: projects/foo/main/a.py\n@@\n+x=1\n*** End Patch";
     let cmd = payload("apply_patch", "command", patch, r);
     let o = run(&["run", "codex", "PreToolUse"], &cmd, &[("KEEL_ROOT", r)]);
     let v: Value = serde_json::from_str(o.stdout.trim()).unwrap();
