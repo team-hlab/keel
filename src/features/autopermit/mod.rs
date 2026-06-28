@@ -44,10 +44,16 @@ impl AutoPermit {
             .get("projects")
             .and_then(Value::as_str)
             .unwrap_or("projects");
-        // in-repo writes outside a worktree: "ask" (default — confirm) or "deny" (strict,
-        // worktree-confined). Catastrophic commands + protected branches still deny regardless.
+        // What to do with an in-repo write outside a worktree:
+        //   deny  — strict, worktree-confined
+        //   ask   — confirm (default; good interactively, but blocks headless/autonomous runs)
+        //   pass  — defer to the agent's own permission model (best for autonomous use)
+        //   allow — keel permits it outright
+        // Catastrophic commands + protected branches still deny regardless.
         let protected = match config.get("protectedWrites").and_then(Value::as_str) {
             Some("deny") => Decision::Deny,
+            Some("pass") => Decision::Pass,
+            Some("allow") => Decision::Allow,
             _ => Decision::Ask,
         };
         AutoPermit {

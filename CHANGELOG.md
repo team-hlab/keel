@@ -9,9 +9,11 @@ the version — see [docs/RELEASING.md](docs/RELEASING.md).
 ### Changed
 - **autopermit default softened**: an in-repo write *outside* a worktree area now **asks**
   (confirm) instead of hard-**deny** — so keel doesn't straitjacket a normal repo that
-  isn't worktree-structured. Strict worktree-confinement is opt-in via
-  `features.autopermit.protectedWrites: "deny"`. Catastrophic commands (`rm -rf /`, force-push,
-  `dd`/`mkfs`, …) and protected-branch git **still deny** regardless.
+  isn't worktree-structured. `features.autopermit.protectedWrites` tunes it:
+  `"ask"` (default), `"deny"` (strict, worktree-confined), `"pass"` (defer to the agent's own
+  permissions — best for **autonomous/headless** runs, where `ask` would block), or `"allow"`.
+  Catastrophic commands (`rm -rf /`, force-push, `dd`/`mkfs`, …) and protected-branch git
+  **still deny** regardless.
 
 ### Added
 - `scripts/live-check.sh` — secret-free local validation that a real Claude Code session
