@@ -6,6 +6,11 @@ the version — see [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+### Fixed
+- **uninstall is now byte-clean** (#20): `clean` prunes the empty stage arrays + the hooks
+  container keel created, so init→uninstall on a settings file with no prior hooks restores
+  it exactly. A user's own hooks (and their container) are preserved.
+
 ### Changed
 - **autopermit default softened**: an in-repo write *outside* a worktree area now **asks**
   (confirm) instead of hard-**deny** — so keel doesn't straitjacket a normal repo that

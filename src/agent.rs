@@ -244,11 +244,21 @@ pub fn clean(a: &Agent) -> std::io::Result<()> {
         Some(v) => v,
         None => return Ok(()), // unparseable — leave it untouched
     };
+    let mut container_empty = false;
     if let Some(c) = cfg
         .get_mut(a.hooks_container)
         .and_then(Value::as_object_mut)
     {
         strip_keel(c);
+        // prune stage arrays that keel emptied, then note if the whole container is now empty
+        c.retain(|_, v| !v.as_array().is_some_and(|arr| arr.is_empty()));
+        container_empty = c.is_empty();
+    }
+    // remove the container key if it's left empty (keel created it) — restore byte-clean
+    if container_empty {
+        if let Some(m) = cfg.as_object_mut() {
+            m.remove(a.hooks_container);
+        }
     }
     write_json(&path, &cfg)
 }
@@ -303,6 +313,37 @@ mod tests {
 
         clean(claude).unwrap();
         assert_eq!(applied_count(claude), 0);
+        // byte-clean: the empty `hooks` container keel created is pruned (no residue)
+        let after: Value =
+            serde_json::from_str(&std::fs::read_to_string(hooks_path(claude)).unwrap()).unwrap();
+        assert!(after.get("hooks").is_none(), "empty hooks residue: {after}");
+
+        std::env::remove_var(consts::ENV_HOME);
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn clean_preserves_a_users_own_hook() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tmp = std::env::temp_dir().join(format!("keel-clean-{}", std::process::id()));
+        std::fs::create_dir_all(tmp.join(".claude")).unwrap();
+        std::env::set_var(consts::ENV_HOME, &tmp);
+        let claude = agent_by_bin("claude").unwrap();
+        let path = hooks_path(claude);
+        std::fs::write(
+            &path,
+            r#"{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"foreign"}]}]}}"#,
+        )
+        .unwrap();
+        apply(claude).unwrap();
+        clean(claude).unwrap();
+        let cfg: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        // keel's entries gone, the user's foreign hook + its container preserved
+        assert_eq!(applied_count(claude), 0);
+        assert_eq!(
+            cfg["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
+            "foreign"
+        );
 
         std::env::remove_var(consts::ENV_HOME);
         std::fs::remove_dir_all(&tmp).ok();
