@@ -6,6 +6,12 @@ the version — see [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+### Added
+- `scripts/live-check.sh` — secret-free local validation that a real Claude Code session
+  honors keel's verdicts (drives `claude -p` via `claude --settings`). The DENY is proven
+  "attempted **and** blocked" using keel's audit-log (so it can't false-pass when Claude
+  never tries); the ALLOW must succeed; exits non-zero on failure. Part of #14.
+
 ## [0.1.3] — 2026-06-27
 
 ### Fixed
