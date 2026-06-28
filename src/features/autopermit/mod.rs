@@ -15,6 +15,7 @@ const STAGES: &[&str] = &["PreToolUse", "PermissionRequest"];
 pub struct AutoPermit {
     patterns: Vec<Regex>,
     regexes: Vec<Regex>,
+    protected: Decision, // verdict for an in-repo write outside the worktree areas
 }
 
 impl AutoPermit {
@@ -43,9 +44,22 @@ impl AutoPermit {
             .get("projects")
             .and_then(Value::as_str)
             .unwrap_or("projects");
+        // What to do with an in-repo write outside a worktree:
+        //   deny  — strict, worktree-confined
+        //   ask   — confirm (default; good interactively, but blocks headless/autonomous runs)
+        //   pass  — defer to the agent's own permission model (best for autonomous use)
+        //   allow — keel permits it outright
+        // Catastrophic commands + protected branches still deny regardless.
+        let protected = match config.get("protectedWrites").and_then(Value::as_str) {
+            Some("deny") => Decision::Deny,
+            Some("pass") => Decision::Pass,
+            Some("allow") => Decision::Allow,
+            _ => Decision::Ask,
+        };
         AutoPermit {
             patterns,
             regexes: policy::write_allow_regexes(worktrees, projects),
+            protected,
         }
     }
 }
@@ -93,6 +107,7 @@ impl Feature for AutoPermit {
                 &self.patterns,
                 &self.regexes,
                 &resolve,
+                self.protected,
             )
         } else {
             let paths = write_paths(event);
@@ -107,6 +122,7 @@ impl Feature for AutoPermit {
                     &event.root,
                     &self.patterns,
                     &self.regexes,
+                    self.protected,
                 )
             } else {
                 // multi-path tools (e.g. Codex apply_patch) → most-restrictive across files,
@@ -120,6 +136,7 @@ impl Feature for AutoPermit {
                         &event.root,
                         &self.patterns,
                         &self.regexes,
+                        self.protected,
                     );
                     if d.rank() > worst.rank() {
                         d

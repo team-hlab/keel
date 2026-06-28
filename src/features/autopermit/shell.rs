@@ -215,6 +215,7 @@ fn classify_write(
     patterns: &[Regex],
     regexes: &[Regex],
     resolve: &dyn Fn(&str, &str) -> String,
+    protected: Decision,
 ) -> Decision {
     if is_sensitive(Some(target), patterns) {
         return Decision::Ask;
@@ -224,11 +225,12 @@ fn classify_write(
         return Decision::Allow;
     }
     if is_inside(&abs, root) {
-        return Decision::Deny;
+        return protected;
     }
     Decision::Pass
 }
 
+#[allow(clippy::too_many_arguments)]
 fn classify_segment(
     seg: &str,
     base: &str,
@@ -236,6 +238,7 @@ fn classify_segment(
     patterns: &[Regex],
     regexes: &[Regex],
     resolve: &dyn Fn(&str, &str) -> String,
+    protected: Decision,
 ) -> Decision {
     // DENY is enforced on the whole command in decide_bash, so it can't reach here.
     if has_expansion(seg) {
@@ -250,14 +253,14 @@ fn classify_segment(
     for t in redirect_targets(seg) {
         worst = worsen(
             worst,
-            classify_write(&t, &exec_dir, root, patterns, regexes, resolve),
+            classify_write(&t, &exec_dir, root, patterns, regexes, resolve, protected),
         );
     }
 
     let s = strip_env(seg);
     if FILE_WRITE.is_match(&s) {
         let v = match last_path_arg(&s) {
-            Some(t) => classify_write(&t, &exec_dir, root, patterns, regexes, resolve),
+            Some(t) => classify_write(&t, &exec_dir, root, patterns, regexes, resolve, protected),
             None => Decision::Pass,
         };
         return worsen(worst, v);
@@ -278,6 +281,7 @@ fn classify_segment(
 }
 
 /// Decide a Bash command string.
+#[allow(clippy::too_many_arguments)]
 pub fn decide_bash(
     command: Option<&str>,
     cwd: Option<&str>,
@@ -285,6 +289,7 @@ pub fn decide_bash(
     patterns: &[Regex],
     regexes: &[Regex],
     resolve: &dyn Fn(&str, &str) -> String,
+    protected: Decision,
 ) -> Decision {
     let command = match command {
         Some(c) => c,
@@ -316,7 +321,7 @@ pub fn decide_bash(
     for seg in split_segments(&inner) {
         worst = worsen(
             worst,
-            classify_segment(&seg, &base, root, patterns, regexes, resolve),
+            classify_segment(&seg, &base, root, patterns, regexes, resolve, protected),
         );
         if matches!(worst, Decision::Deny) {
             break;
@@ -360,9 +365,12 @@ mod tests {
     }
 
     fn d(cmd: &str, cwd: &str) -> Decision {
+        d_p(cmd, cwd, Decision::Ask) // default: in-repo writes ask, not deny
+    }
+    fn d_p(cmd: &str, cwd: &str, protected: Decision) -> Decision {
         let p = pats();
         let r = write_allow_regexes("worktrees", "projects");
-        decide_bash(Some(cmd), Some(cwd), ROOT, &p, &r, &normpath)
+        decide_bash(Some(cmd), Some(cwd), ROOT, &p, &r, &normpath, protected)
     }
 
     #[test]
@@ -423,10 +431,22 @@ mod tests {
     }
 
     #[test]
-    fn protected_deny() {
-        assert_eq!(d("echo x > projects/foo/main/y", ROOT), Decision::Deny);
-        assert_eq!(d("mkdir projects/foo/main/sub", ROOT), Decision::Deny);
-        assert_eq!(d("echo x > CLAUDE.md", ROOT), Decision::Deny); // protected root file
+    fn protected_writes_default_ask_strict_deny() {
+        // default: in-repo writes outside a worktree → ASK (not a hard block)
+        assert_eq!(d("echo x > projects/foo/main/y", ROOT), Decision::Ask);
+        assert_eq!(d("mkdir projects/foo/main/sub", ROOT), Decision::Ask);
+        assert_eq!(d("echo x > CLAUDE.md", ROOT), Decision::Ask);
+        // strict mode (protectedWrites="deny") → DENY
+        assert_eq!(
+            d_p("echo x > projects/foo/main/y", ROOT, Decision::Deny),
+            Decision::Deny
+        );
+        assert_eq!(
+            d_p("echo x > CLAUDE.md", ROOT, Decision::Deny),
+            Decision::Deny
+        );
+        // catastrophic stays DENY regardless of the knob
+        assert_eq!(d_p("rm -rf /", ROOT, Decision::Ask), Decision::Deny);
     }
 
     #[test]
@@ -475,7 +495,7 @@ mod tests {
         let p = pats();
         let r = write_allow_regexes("worktrees", "projects");
         assert_eq!(
-            decide_bash(None, Some(ROOT), ROOT, &p, &r, &normpath),
+            decide_bash(None, Some(ROOT), ROOT, &p, &r, &normpath, Decision::Ask),
             Decision::Pass
         );
     }
