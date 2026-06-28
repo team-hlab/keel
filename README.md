@@ -38,7 +38,7 @@ keel is Rust, its behavior covered by the Rust test suite (unit + integration + 
 
 | Feature | Stage(s) | What it does |
 |---|---|---|
-| **autopermit** | PreToolUse, PermissionRequest | permit non-secret reads + worktree writes + safe shell; `ask` secrets; `deny` out-of-worktree writes & catastrophic commands |
+| **autopermit** | PreToolUse, PermissionRequest | permit non-secret reads + worktree writes + safe shell; `ask` secrets & in-repo writes outside a worktree (set `protectedWrites:"deny"` for strict); `deny` catastrophic commands |
 | **branch-guard** | PreToolUse | `deny` mutating git on a protected branch |
 | **secret-scan** | PreToolUse | `ask` when a write's content looks like a credential |
 | **audit-log** | PreToolUse | append every call to JSONL (opt-in — it writes files) |

@@ -150,7 +150,7 @@ fn pretooluse_files_and_bash() {
             &payload("Write", "file_path", "projects/foo/main/A", r),
             r
         ),
-        "deny"
+        "ask" // in-repo write outside a worktree → ask by default (was deny)
     );
     assert_eq!(
         pre("claude", &payload("Write", "file_path", "/var/tmp/x", r), r),
@@ -209,6 +209,12 @@ fn secret_scan_aggregates_to_ask() {
 fn permission_request_render() {
     let root = project_root();
     let r = root.to_str().unwrap();
+    // strict mode so the in-repo write denies — exercises the deny render path
+    fs::write(
+        root.join(".keel.json"),
+        r#"{"features":{"autopermit":{"protectedWrites":"deny"}}}"#,
+    )
+    .unwrap();
     assert_eq!(perm(&payload("Read", "file_path", "a.md", r), r), "allow");
     assert_eq!(
         perm(&payload("Write", "file_path", "projects/foo/main/A", r), r),
@@ -259,6 +265,12 @@ fn codex_and_antigravity_render() {
 fn write_tools_gated_on_codex_and_antigravity() {
     let root = project_root();
     let r = root.to_str().unwrap();
+    // strict mode: assert these tools are recognized + gated to deny (default would be ask)
+    fs::write(
+        root.join(".keel.json"),
+        r#"{"features":{"autopermit":{"protectedWrites":"deny"}}}"#,
+    )
+    .unwrap();
 
     // Codex apply_patch: a SAFE worktree file first, a PROTECTED file second → deny
     // (the protected write must not slip through behind the safe one).

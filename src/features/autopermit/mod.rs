@@ -15,6 +15,7 @@ const STAGES: &[&str] = &["PreToolUse", "PermissionRequest"];
 pub struct AutoPermit {
     patterns: Vec<Regex>,
     regexes: Vec<Regex>,
+    protected: Decision, // verdict for an in-repo write outside the worktree areas
 }
 
 impl AutoPermit {
@@ -43,9 +44,16 @@ impl AutoPermit {
             .get("projects")
             .and_then(Value::as_str)
             .unwrap_or("projects");
+        // in-repo writes outside a worktree: "ask" (default — confirm) or "deny" (strict,
+        // worktree-confined). Catastrophic commands + protected branches still deny regardless.
+        let protected = match config.get("protectedWrites").and_then(Value::as_str) {
+            Some("deny") => Decision::Deny,
+            _ => Decision::Ask,
+        };
         AutoPermit {
             patterns,
             regexes: policy::write_allow_regexes(worktrees, projects),
+            protected,
         }
     }
 }
@@ -93,6 +101,7 @@ impl Feature for AutoPermit {
                 &self.patterns,
                 &self.regexes,
                 &resolve,
+                self.protected,
             )
         } else {
             let paths = write_paths(event);
@@ -107,6 +116,7 @@ impl Feature for AutoPermit {
                     &event.root,
                     &self.patterns,
                     &self.regexes,
+                    self.protected,
                 )
             } else {
                 // multi-path tools (e.g. Codex apply_patch) → most-restrictive across files,
@@ -120,6 +130,7 @@ impl Feature for AutoPermit {
                         &event.root,
                         &self.patterns,
                         &self.regexes,
+                        self.protected,
                     );
                     if d.rank() > worst.rank() {
                         d

@@ -58,7 +58,7 @@ verdict claude PreToolUse "$P_RM"     | grep -q '"permissionDecision":"deny"'  |
 verdict claude PreToolUse "$P_RD"     | grep -q '"permissionDecision":"allow"' || fail "claude read → allow"
 verdict claude PreToolUse "$P_SECRET" | grep -q '"permissionDecision":"ask"'   || fail "claude secret → ask"
 verdict claude PreToolUse "$P_WT"     | grep -q '"permissionDecision":"allow"' || fail "claude worktree → allow"
-verdict claude PreToolUse "$P_MAIN"   | grep -q '"permissionDecision":"deny"'  || fail "claude main → deny"
+verdict claude PreToolUse "$P_MAIN"   | grep -q '"permissionDecision":"ask"'   || fail "claude in-repo write → ask"
 verdict claude PreToolUse "$P_COMMIT" | grep -q '"permissionDecision":"deny"'  || fail "branch-guard commit-on-main → deny"
 verdict claude PermissionRequest "$P_SECRET" | grep -q '{"continue":true}'     || fail "permissionRequest secret → defer"
 verdict codex  PreToolUse "$P_RM"     | grep -q '"permissionDecision":"deny"'  || fail "codex rm -rf → deny"

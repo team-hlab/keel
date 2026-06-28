@@ -77,6 +77,7 @@ pub fn decide(
     root: &str,
     patterns: &[Regex],
     regexes: &[Regex],
+    protected: Decision, // verdict for an in-repo write outside the worktree areas
 ) -> Decision {
     let tool = tool.unwrap_or("");
     if READ_TOOLS.contains(&tool) {
@@ -98,7 +99,7 @@ pub fn decide(
             return Decision::Allow;
         }
         if is_inside(abs, root) {
-            return Decision::Deny;
+            return protected;
         }
         return Decision::Pass;
     }
@@ -116,6 +117,9 @@ mod tests {
     }
 
     fn dec(tool: &str, rel: Option<&str>) -> Decision {
+        dec_p(tool, rel, Decision::Ask) // default: in-repo writes ask, not deny
+    }
+    fn dec_p(tool: &str, rel: Option<&str>, protected: Decision) -> Decision {
         let p = pats();
         let r = write_allow_regexes("worktrees", "projects");
         let abs = rel.map(|x| {
@@ -125,7 +129,7 @@ mod tests {
                 format!("{ROOT}/{x}")
             }
         });
-        decide(Some(tool), rel, abs.as_deref(), ROOT, &p, &r)
+        decide(Some(tool), rel, abs.as_deref(), ROOT, &p, &r, protected)
     }
 
     #[test]
@@ -138,10 +142,28 @@ mod tests {
     #[test]
     fn writes() {
         assert_eq!(dec("Write", Some("worktrees/x/a")), Decision::Allow);
-        assert_eq!(dec("Edit", Some("projects/foo/main/A")), Decision::Deny);
-        assert_eq!(dec("Write", Some("/tmp/x")), Decision::Pass);
-        assert_eq!(dec("Write", Some("worktrees/x/.env")), Decision::Ask);
-        assert_eq!(dec("Write", None), Decision::Deny);
+        assert_eq!(dec("Edit", Some("projects/foo/main/A")), Decision::Ask); // in-repo → ask (default)
+        assert_eq!(dec("Write", Some("/tmp/x")), Decision::Pass); // outside repo → defer
+        assert_eq!(dec("Write", Some("worktrees/x/.env")), Decision::Ask); // secret → ask
+        assert_eq!(dec("Write", None), Decision::Deny); // malformed (no path) → deny
+    }
+
+    #[test]
+    fn protected_writes_configurable() {
+        // strict mode: in-repo writes outside a worktree are denied
+        assert_eq!(
+            dec_p("Edit", Some("projects/foo/main/A"), Decision::Deny),
+            Decision::Deny
+        );
+        // worktree + outside-repo are unaffected by the knob
+        assert_eq!(
+            dec_p("Write", Some("worktrees/x/a"), Decision::Deny),
+            Decision::Allow
+        );
+        assert_eq!(
+            dec_p("Write", Some("/tmp/x"), Decision::Deny),
+            Decision::Pass
+        );
     }
 
     #[test]
