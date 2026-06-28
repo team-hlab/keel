@@ -6,6 +6,8 @@ the version — see [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+## [0.1.4] — 2026-06-29
+
 ### Fixed
 - **uninstall is now byte-clean** (#20): `clean` prunes the empty stage arrays + the hooks
   container keel created, so init→uninstall on a settings file with no prior hooks restores

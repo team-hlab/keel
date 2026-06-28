@@ -1,6 +1,6 @@
 [package]
 name = "keel"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 rust-version = "1.80"
 description = "A lean, fast hook harness for first-party AI coding agents (permit/deny/ask)."
