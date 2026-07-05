@@ -6,6 +6,17 @@ the version — see [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+### Added
+- **Decision log** — opt-in (`"log": {"enabled": true, "path": "~/.keel/decisions.jsonl",
+  "maxSizeMb": 5}`) run-level JSONL of every hook call's final verdict (op · resource ·
+  verdict · reason · source), with size-roll retention. `keel stats [logfile]` summarizes the
+  verdict mix + what's driving `ask`. Zero cost when off; the append is negligible next to
+  the per-call process spawn (verified).
+
+### Removed
+- The `audit-log` feature — superseded by the decision log (which records the *verdict*, not
+  just the call). One logger, not two.
+
 ## [0.1.4] — 2026-06-29
 
 ### Fixed

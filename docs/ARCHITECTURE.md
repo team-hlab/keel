@@ -68,7 +68,7 @@ layer that re-derives the *same* verdict, so the two can never disagree. Adapter
 | adapters | `adapters/{claude_code,codex,antigravity}.py` | parse platform JSON ⇄ render verdict |
 | features | `features/base.py` | the `Feature` protocol |
 | features | `features/autopermit/` | files (`policy.py`) + shell (`shell.py`) + `feature.py` |
-| features | `features/{branch_guard,secret_scan,audit_log,session_banner}.py` | the rest |
+| features | `features/{branch_guard,secret_scan,session_banner}.py` | the rest |
 | edge | `cli.py` · `install.py` · `bin/keel.sh` | entrypoint, attach command, runtime preflight |
 
 ## Adding a feature

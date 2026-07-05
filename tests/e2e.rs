@@ -1,6 +1,6 @@
 //! End-to-end tests: drive the compiled `keel` binary as a subprocess.
 //! Covers the CLI, every stage, multi-feature aggregation, fail-open, all three
-//! adapters, audit-log opt-in, and the busybox shim (incl. the fork-bomb guard).
+//! adapters, decision-log, and the busybox shim (incl. the fork-bomb guard).
 
 use std::fs;
 use std::io::Write;
@@ -103,7 +103,6 @@ fn cli_features_lists_all() {
         "autopermit",
         "branch-guard",
         "secret-scan",
-        "audit-log",
         "session-banner",
     ] {
         assert!(o.stdout.contains(f), "missing {f}");
@@ -314,28 +313,33 @@ fn session_start_banner_to_stderr() {
     fs::remove_dir_all(&root).ok();
 }
 
-// ---- audit-log opt-in ---------------------------------------------------
+// ---- decision log -------------------------------------------------------
 
 #[test]
-fn audit_log_is_opt_in() {
+fn decision_log_records_verdict_when_enabled() {
     let root = project_root();
     let r = root.to_str().unwrap();
+    let logp = root.join("decisions.jsonl");
     let read = payload("Read", "file_path", "a.md", r);
 
-    // default: off → no log file
+    // default: off → no log
     let _ = pre("claude", &read, r);
-    assert!(!root.join(".keel/audit.log").exists());
+    assert!(!logp.exists());
 
-    // opt-in via .keel.json → log written
+    // opt-in via .keel.json (path contained in the test project)
     fs::write(
         root.join(".keel.json"),
-        r#"{"features":{"audit-log":{"enabled":true}}}"#,
+        format!(
+            r#"{{"log":{{"enabled":true,"path":"{}"}}}}"#,
+            logp.display()
+        ),
     )
     .unwrap();
     let _ = pre("claude", &read, r);
-    let log = fs::read_to_string(root.join(".keel/audit.log")).unwrap();
-    let rec: Value = serde_json::from_str(log.trim()).unwrap();
-    assert_eq!(rec["tool"], "Read");
+    let rec: Value = serde_json::from_str(fs::read_to_string(&logp).unwrap().trim()).unwrap();
+    assert_eq!(rec["op"], "read"); // operation derived from the tool
+    assert_eq!(rec["verdict"], "allow"); // the FINAL aggregated verdict is logged
+    assert_eq!(rec["resource"], "a.md");
     fs::remove_dir_all(&root).ok();
 }
 
@@ -487,17 +491,18 @@ fn fault_tolerant_root_and_config() {
 }
 
 #[test]
-fn audit_log_failure_does_not_break_verdict() {
+fn decision_log_failure_does_not_break_verdict() {
     let root = project_root();
     let r = root.to_str().unwrap();
-    // make the audit dir un-creatable: a FILE where .keel/ would go
-    fs::write(root.join(".keel"), "x").unwrap();
+    // point the log at an un-writable path: a FILE stands where its parent dir would go
+    fs::write(root.join("blocker"), "x").unwrap();
+    let bad = root.join("blocker/decisions.jsonl");
     fs::write(
         root.join(".keel.json"),
-        r#"{"features":{"audit-log":{"enabled":true}}}"#,
+        format!(r#"{{"log":{{"enabled":true,"path":"{}"}}}}"#, bad.display()),
     )
     .unwrap();
-    // observer fails silently; the gating verdict is unaffected
+    // logging fails silently; the gating verdict is unaffected
     assert_eq!(
         pre("claude", &payload("Read", "file_path", "a.md", r), r),
         "allow"

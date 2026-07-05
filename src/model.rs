@@ -37,8 +37,7 @@ impl Decision {
 pub struct Verdict {
     pub decision: Decision,
     pub reason: String,
-    /// The feature that produced this verdict (consumed by audit-log / status in Phase 2).
-    #[allow(dead_code)]
+    /// The feature that produced this verdict (recorded in the decision log).
     pub source: String,
 }
 

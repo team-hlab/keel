@@ -6,8 +6,8 @@
 pub const KEEL_DIR: &str = ".keel";
 /// Subdirectory of [`KEEL_DIR`] holding the busybox shim symlinks.
 pub const SHIM_BIN_SUBDIR: &str = "bin";
-/// Audit-log file name (under `<root>/<KEEL_DIR>/`).
-pub const AUDIT_LOG_NAME: &str = "audit.log";
+/// Decision-log file name (under `~/<KEEL_DIR>/`): one JSONL line per hook call.
+pub const DECISION_LOG_NAME: &str = "decisions.jsonl";
 /// Per-project config file, looked up under the project root.
 pub const CONFIG_FILE: &str = ".keel.json";
 /// Git directory name, used for project-root discovery.

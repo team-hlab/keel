@@ -2,7 +2,6 @@
 
 use serde_json::Value;
 
-use crate::features::audit_log::AuditLog;
 use crate::features::autopermit::AutoPermit;
 use crate::features::branch_guard::BranchGuard;
 use crate::features::secret_scan::SecretScan;
@@ -14,7 +13,6 @@ pub const NAMES: &[&str] = &[
     "autopermit",
     "branch-guard",
     "secret-scan",
-    "audit-log",
     "session-banner",
 ];
 
@@ -24,8 +22,7 @@ fn enabled(config: &Value, name: &str) -> bool {
         .and_then(|f| f.get(name))
         .and_then(|s| s.get("enabled"))
         .and_then(Value::as_bool)
-        // gating features default on; audit-log writes files, so it's opt-in
-        .unwrap_or(name != "audit-log")
+        .unwrap_or(true) // all features default on
 }
 
 fn feature_config(config: &Value, name: &str) -> Value {
@@ -60,12 +57,6 @@ pub fn load(config: &Value) -> Vec<Box<dyn Feature>> {
         features.push(Box::new(SecretScan::new(&feature_config(
             config,
             "secret-scan",
-        ))));
-    }
-    if enabled(config, "audit-log") {
-        features.push(Box::new(AuditLog::new(&feature_config(
-            config,
-            "audit-log",
         ))));
     }
     if enabled(config, "session-banner") {
