@@ -66,7 +66,14 @@ No options (just `enabled`). Prints the active feature list to **stderr** at Ses
 ## Decision log (`log`) — top-level, not a feature
 
 One JSONL line per hook call recording the **final verdict** (`op`, `resource`, `verdict`,
-`reason`, `source`), so you can tune the policy from real usage. **Opt-in; zero cost when off.**
+`reason`, `source`). **Opt-in; zero cost when off.**
+
+**Why it exists.** Each record is one decision — `(op, resource) → verdict`. Three jobs:
+1. **Tune the policy.** `keel stats` shows what's driving `ask` (the friction) → promote the
+   confidently-safe cases to `allow`, instead of guessing.
+2. **Surface adapter gaps.** `op: "other"` is a tool keel doesn't map yet (e.g. an agent's
+   read/network tool) → the coverage TODO. The log turns "audit the adapters" into a readout.
+3. **Audit.** A bounded, `0600` record of what the agent tried and what keel decided.
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
