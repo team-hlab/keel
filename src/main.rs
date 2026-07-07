@@ -100,6 +100,8 @@ fn run(platform: &str, stage: &str) {
     event.config = runtime::load_config(&event.root);
     let features = registry::load(&event.config);
     let verdict = engine::run(&event, &features);
-    decision_log::record(&event.config, platform, stage, &event, &verdict);
+    // emit + flush the decision FIRST, then log — logging must never delay the verdict.
     print!("{}", adapters::render(platform, &verdict, stage));
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+    decision_log::record(&event.config, platform, stage, &event, &verdict);
 }

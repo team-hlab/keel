@@ -6,6 +6,7 @@
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -77,9 +78,30 @@ pub fn record(config: &Value, platform: &str, stage: &str, event: &Event, verdic
     if let Some(p) = path.parent() {
         let _ = fs::create_dir_all(p);
     }
-    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&path) {
+    // 0600 on create: the log can contain command text (and thus secrets) — owner-only.
+    if let Ok(mut f) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .open(&path)
+    {
         let _ = writeln!(f, "{rec}");
     }
+}
+
+/// The log path for `keel stats`: the CLI arg, else the `log.path` configured for the cwd's
+/// project, else the default — so `keel stats` finds a custom path without repeating it.
+fn stats_path(path_arg: Option<&str>) -> PathBuf {
+    if let Some(p) = path_arg {
+        return resolve_path(p);
+    }
+    let root = crate::runtime::find_root(None);
+    crate::runtime::load_config(&root)
+        .get("log")
+        .and_then(|l| l.get("path"))
+        .and_then(Value::as_str)
+        .map(resolve_path)
+        .unwrap_or_else(default_path)
 }
 
 fn top(map: &BTreeMap<String, u64>, n: usize) -> Vec<(&String, u64)> {
@@ -92,7 +114,7 @@ fn top(map: &BTreeMap<String, u64>, n: usize) -> Vec<(&String, u64)> {
 /// Summarize the decision log for `keel stats`: verdict mix + what's driving `ask`
 /// (the curation candidates for the allow-set).
 pub fn summarize(path_arg: Option<&str>) -> String {
-    let path = path_arg.map(resolve_path).unwrap_or_else(default_path);
+    let path = stats_path(path_arg);
     let text = match fs::read_to_string(&path) {
         Ok(t) => t,
         Err(_) => {

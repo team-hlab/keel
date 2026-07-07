@@ -74,7 +74,12 @@ One JSONL line per hook call recording the **final verdict** (`op`, `resource`, 
 | `path` | string | `~/.keel/decisions.jsonl` | Log file (`~` expands to `$HOME`). |
 | `maxSizeMb` | number | `5` | Size-roll: past this the file rolls to `<name>.1` (bounded ≤ ~2×). |
 
-Summarize it — verdict mix + what's driving `ask` — with **`keel stats [logfile]`**.
+Summarize it — verdict mix + what's driving `ask` — with **`keel stats [logfile]`** (no arg → the
+configured `log.path`, else the default).
+
+> **Sensitivity:** the log records resource **paths** and **command text**, which can contain
+> secrets (e.g. `TOKEN=… curl …`). keel creates it `0600` (owner-only) — treat it as sensitive
+> and don't commit or share it. It never records file *content*.
 
 ## Environment overrides
 
