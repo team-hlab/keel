@@ -18,27 +18,25 @@ missing key falls back to its default.
     },
     "branch-guard":   { "enabled": true, "protected": ["main", "master", "develop"] },
     "secret-scan":    { "enabled": true },
-    "audit-log":      { "enabled": false, "path": ".keel/audit.log" },
     "session-banner": { "enabled": true }
-  }
+  },
+  "log": { "enabled": false, "path": "~/.keel/decisions.jsonl", "maxSizeMb": 5 }
 }
 ```
 
 ## Feature toggles
 
-Every feature accepts **`enabled`** (bool). Gating features default **on**; `audit-log`
-defaults **off** because it writes files (opt-in).
+Every feature accepts **`enabled`** (bool); all default **on**.
 
 | Feature | Default | Stage(s) |
 |---|---|---|
 | `autopermit` | on | PreToolUse, PermissionRequest |
 | `branch-guard` | on | PreToolUse |
 | `secret-scan` | on | PreToolUse |
-| `audit-log` | **off** | PreToolUse |
 | `session-banner` | on | SessionStart |
 
 ```json
-{ "features": { "audit-log": { "enabled": true }, "session-banner": { "enabled": false } } }
+{ "features": { "session-banner": { "enabled": false } } }
 ```
 
 ## Per-feature options
@@ -62,13 +60,33 @@ Outside those areas, writes **inside** `<root>` → **ask** (or **deny** with `p
 No options (just `enabled`). Flags writes whose **content** matches built-in credential
 patterns — AWS key id, PEM private key, GitHub/Slack tokens, `api_key=…`/`secret=…` — → **ask**.
 
-### `audit-log`
-| Key | Type | Default | Meaning |
-|---|---|---|---|
-| `path` | string | `<root>/.keel/audit.log` | JSONL file; one record (ts, stage, tool, cwd, file/command) appended per PreToolUse call. |
-
 ### `session-banner`
 No options (just `enabled`). Prints the active feature list to **stderr** at SessionStart.
+
+## Decision log (`log`) — top-level, not a feature
+
+One JSONL line per hook call recording the **final verdict** (`op`, `resource`, `verdict`,
+`reason`, `source`). **Opt-in; zero cost when off.**
+
+**Why it exists.** Each record is one decision — `(op, resource) → verdict`. Three jobs:
+1. **Tune the policy.** `keel stats` shows what's driving `ask` (the friction) → promote the
+   confidently-safe cases to `allow`, instead of guessing.
+2. **Surface adapter gaps.** `op: "other"` is a tool keel doesn't map yet (e.g. an agent's
+   read/network tool) → the coverage TODO. The log turns "audit the adapters" into a readout.
+3. **Audit.** A bounded, `0600` record of what the agent tried and what keel decided.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `enabled` | bool | `false` | Turn the log on. |
+| `path` | string | `~/.keel/decisions.jsonl` | Log file (`~` expands to `$HOME`). |
+| `maxSizeMb` | number | `5` | Size-roll: past this the file rolls to `<name>.1` (bounded ≤ ~2×). |
+
+Summarize it — verdict mix + what's driving `ask` — with **`keel stats [logfile]`** (no arg → the
+configured `log.path`, else the default).
+
+> **Sensitivity:** the log records resource **paths** and **command text**, which can contain
+> secrets (e.g. `TOKEN=… curl …`). keel creates it `0600` (owner-only) — treat it as sensitive
+> and don't commit or share it. It never records file *content*.
 
 ## Environment overrides
 

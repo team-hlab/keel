@@ -6,6 +6,7 @@
 mod adapters;
 mod agent;
 mod consts;
+mod decision_log;
 mod engine;
 mod features;
 mod model;
@@ -26,6 +27,7 @@ usage:
   keel init                                     # attach keel to your installed agents
   keel apply | uninstall | doctor | status      # manage the install
   keel run <claude|codex|antigravity> <stage>   # hook entrypoint (used by the hooks)
+  keel stats [logfile]                          # summarize the decision log
   keel features | version
 ";
 
@@ -65,6 +67,13 @@ fn cli(args: &[String]) -> i32 {
             }
             0
         }
+        "stats" => {
+            print!(
+                "{}",
+                decision_log::summarize(args.get(1).map(String::as_str))
+            );
+            0
+        }
         "init" => shim::init(),
         "apply" => shim::apply_all(),
         "uninstall" => shim::uninstall(),
@@ -91,5 +100,8 @@ fn run(platform: &str, stage: &str) {
     event.config = runtime::load_config(&event.root);
     let features = registry::load(&event.config);
     let verdict = engine::run(&event, &features);
+    // emit + flush the decision FIRST, then log — logging must never delay the verdict.
     print!("{}", adapters::render(platform, &verdict, stage));
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+    decision_log::record(&event.config, platform, stage, &event, &verdict);
 }

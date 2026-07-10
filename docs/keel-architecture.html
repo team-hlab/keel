@@ -301,7 +301,7 @@ keel &lt;cmd&gt;               → <span class="ty">CLI</span>:
       <tr><td>autopermit</td><td>PreToolUse · PermissionRequest</td><td>permit non-secret reads + worktree writes + safe shell; <span class="v-ask">ask</span> secrets; <span class="v-deny">deny</span> out-of-worktree writes &amp; catastrophic commands</td></tr>
       <tr><td>branch-guard</td><td>PreToolUse</td><td><span class="v-deny">deny</span> mutating git on a protected branch</td></tr>
       <tr><td>secret-scan</td><td>PreToolUse</td><td><span class="v-ask">ask</span> when write <em>content</em> looks like a credential</td></tr>
-      <tr><td>audit-log</td><td>Pre/PostToolUse</td><td>append every call + verdict to JSONL (observer)</td></tr>
+      <tr><td>decision log</td><td>run-level (opt-in)</td><td>JSONL of every call + final verdict; <code>keel stats</code> summarizes</td></tr>
       <tr><td>session-banner</td><td>SessionStart</td><td>announce active features + runtime (observer)</td></tr>
     </tbody>
   </table>

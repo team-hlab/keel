@@ -16,7 +16,7 @@ timeout 30 agy    --version >/dev/null 2>&1 || fail "agy --version"
 ok "claude + codex + agy installed"
 
 echo "== keel features =="
-for f in autopermit branch-guard secret-scan audit-log session-banner; do
+for f in autopermit branch-guard secret-scan session-banner; do
   keel features | grep -qx "$f" || fail "feature missing: $f"
 done
 ok "keel features lists all 5"

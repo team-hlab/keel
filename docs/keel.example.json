@@ -1,9 +1,9 @@
 {
   "features": {
-    "autopermit":     { "sensitiveFilePatterns": [".env*", "*.key", "*.pem", "credentials*", "*secret*"] },
+    "autopermit":     { "sensitiveFilePatterns": [".env*", "*.key", "*.pem", "credentials*", "*secret*"], "protectedWrites": "ask" },
     "branch-guard":   { "protected": ["main", "master", "develop"] },
-    "audit-log":      { "enabled": true, "path": ".keel/audit.log" },
     "secret-scan":    { "enabled": true },
     "session-banner": { "enabled": true }
-  }
+  },
+  "log": { "enabled": true, "path": "~/.keel/decisions.jsonl", "maxSizeMb": 5 }
 }
