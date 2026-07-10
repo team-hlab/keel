@@ -6,6 +6,13 @@ the version — see [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
+### Fixed
+- **Antigravity content-read tools are now gated.** `view_file` / `search_in_file` /
+  `view_file_outline` (via `args.AbsolutePath`) and `view_code_item` (via `args.File`) are
+  normalized to `Read` and added to the hook matcher, so read gating (secret files → ask)
+  applies on Antigravity — previously they were unrecognized (`op:"other"`) and passed
+  ungated. (Codex reads go through the shell; Claude reads are native — both already covered.)
+
 ### Added
 - **Decision log** — opt-in (`"log": {"enabled": true, "path": "~/.keel/decisions.jsonl",
   "maxSizeMb": 5}`) run-level JSONL of every hook call's final verdict (op · resource ·
