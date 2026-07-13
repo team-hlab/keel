@@ -6,8 +6,9 @@
 //! `{"decision": "allow"|"deny"|"ask", "reason": …}` and a non-zero exit = deny (so keel
 //! always emits JSON + exits 0). Write tools (`write_to_file`, `replace_file_content`,
 //! `multi_replace_file_content`) and content-read tools (`view_file`, `search_in_file`,
-//! `view_file_outline` via `args.AbsolutePath`; `view_code_item` via `args.File`) are
-//! normalized into keel's neutral model so file/secret gating applies. keel registers under
+//! `view_file_outline` via `args.AbsolutePath`; `view_code_item` via `args.File`;
+//! `grep_search` via `args.SearchPath`) are normalized into keel's neutral model so
+//! file/secret gating applies. keel registers under
 //! the `keel` namespace in `~/.gemini/config/hooks.json` with a matcher on these tool names
 //! (see agent.rs), so Antigravity fires keel for them.
 
@@ -100,6 +101,8 @@ fn normalize(tool: Option<String>, args: Value) -> (Option<String>, Value) {
             Some(("Read", arg_obj(&[("file_path", s("AbsolutePath"))])))
         }
         Some("view_code_item") => Some(("Read", arg_obj(&[("file_path", s("File"))]))),
+        // grep within a file reads its content (SearchPath may be a dir → not sensitive → allow)
+        Some("grep_search") => Some(("Read", arg_obj(&[("file_path", s("SearchPath"))]))),
         _ => None,
     };
     match mapped {
@@ -203,6 +206,14 @@ mod tests {
         );
         assert_eq!(e.tool.as_deref(), Some("Read"));
         assert_eq!(e.file_path(), Some("/r/a.rs"));
+
+        // grep_search reads via SearchPath
+        let e = parse(
+            &json!({"toolCall":{"name":"grep_search","args":{"SearchPath":"/r/id_rsa","Query":"x"}}}),
+            "PreToolUse",
+        );
+        assert_eq!(e.tool.as_deref(), Some("Read"));
+        assert_eq!(e.file_path(), Some("/r/id_rsa"));
     }
 
     #[test]

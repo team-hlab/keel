@@ -56,7 +56,7 @@ pub const AGENTS: &[Agent] = &[
 // Claude/Codex tool names (`apply_patch` is Codex's edit tool; Claude never sends it).
 const TOOL_MATCHER: &str = "Read|Glob|Grep|Edit|MultiEdit|Write|NotebookEdit|Bash|apply_patch";
 // Antigravity's own tool names — the ones keel gates (shell · writes · content reads).
-const ANTIGRAVITY_MATCHER: &str = "run_command|write_to_file|replace_file_content|multi_replace_file_content|view_file|view_code_item|search_in_file|view_file_outline";
+const ANTIGRAVITY_MATCHER: &str = "run_command|write_to_file|replace_file_content|multi_replace_file_content|view_file|view_code_item|search_in_file|view_file_outline|grep_search";
 const STAGES: &[(&str, bool)] = &[
     ("PreToolUse", true),
     ("PermissionRequest", true),
