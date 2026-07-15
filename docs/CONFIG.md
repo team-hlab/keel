@@ -5,14 +5,14 @@ otherwise built-in defaults. `<root>` is `$KEEL_ROOT` or the nearest `.git` ance
 tool call's `cwd`. **Everything is optional** — keel works with no config file, and any
 missing key falls back to its default.
 
-## Shape (all values shown are the defaults)
+## Shape (values shown are the defaults — see the table below for the full lists)
 
 ```json
 {
   "features": {
     "autopermit": {
       "enabled": true,
-      "sensitiveFilePatterns": [".env*", "*.key", "*.pem", "credentials*", "*secret*", "id_rsa*"],
+      "sensitiveFilePatterns": [".env*", "*.key", "*.pem", "credentials*", "*secret*", "id_rsa*", "…"],
       "worktrees": "worktrees",
       "projects": "projects"
     },

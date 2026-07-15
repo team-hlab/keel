@@ -36,15 +36,33 @@ static TEE: LazyLock<Regex> = LazyLock::new(|| rx(r"\|\s*tee\s+(?:-a\s+)?([^\s;|
 static SED_INPLACE: LazyLock<Regex> = LazyLock::new(|| rx(r"^sed\s+-i"));
 // Content-dumping reads. These print a file's bytes (the exfil path an agent falls back to
 // when the Read tool is gated: `cat .env`, `base64 id_rsa`, `jq .k credentials.json`), so
-// their file target is checked for sensitivity even though the command itself is harmless.
-// Transformers that read stdin (`tr`, `sort`) are included too: with `cmd < .env` the file is
-// the last token, so the target check catches the input-redirect path as well. Metadata-only
-// readers (ls/stat/file/find/wc) stay in SAFE and skip the check — they don't reveal contents.
+// every file operand is checked for sensitivity even though the command itself is harmless.
+// Transformers that read stdin (`tr`, `sort`) are included too; the `< file` input-redirect
+// path is gated separately (see INPUT_REDIR). Metadata-only readers (ls/stat/file/wc) stay in
+// SAFE and skip the check — they don't reveal contents.
 static READ_CMDS: LazyLock<Regex> = LazyLock::new(|| {
     rx(
         r"^(cat|head|tail|less|more|nl|tac|xxd|od|hexdump|base64|base32|strings|grep|egrep|fgrep|rg|awk|sed|cut|sort|uniq|tr|jq|column|rev|fold|comm|join|paste|diff)\b",
     )
 });
+// Pattern-first readers: the first operand is a search pattern / script, not a file, so it's
+// skipped when scanning read targets (`grep AKIA .env` → check `.env`, not `AKIA`).
+static PATTERN_READ: LazyLock<Regex> = LazyLock::new(|| rx(r"^(grep|egrep|fgrep|rg|awk|sed)\b"));
+// Transparent wrappers that exec the rest of the line unchanged. Stripped (repeatedly) before
+// command matching so `command cat .env` / `timeout 5 cat .env` / `nohup base64 id_rsa` are
+// gated on the wrapped command, not waved through. `command` is a POSIX alias-bypass primitive.
+static WRAPPER: LazyLock<Regex> = LazyLock::new(|| {
+    rx(
+        r"^(command|env|nohup|time|unbuffer|stdbuf\s+-\S+|ionice(\s+-\S+)*|nice(\s+-n\s+\d+|\s+-\d+)?|timeout(\s+-\S+)*\s+[\d.]+[smhd]?)\s+",
+    )
+});
+// A `find` action that runs a sub-command (which can dump file contents) — SAFE would
+// otherwise allow it; we scan its tokens for sensitive targets instead.
+static FIND_EXEC: LazyLock<Regex> = LazyLock::new(|| rx(r"^find\b.*\s-(exec|execdir|ok)\b"));
+// Input redirect `< file` (not `<<` heredoc, `<&` fd-dup, or `<(` process-sub). The file's
+// contents flow into the command's stdin, so a sensitive target is a read to gate.
+static INPUT_REDIR: LazyLock<Regex> =
+    LazyLock::new(|| rx(r"(?:^|[^<&0-9])<\s*([A-Za-z0-9_./~][^\s;|&<>]*)"));
 
 static SAFE: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     vec![
@@ -52,7 +70,7 @@ static SAFE: LazyLock<Vec<Regex>> = LazyLock::new(|| {
             r"^git\s+(-C\s+\S+\s+)?(status|diff|log|show|branch|fetch|remote|rev-parse|ls-files|ls-tree|describe|config\s+--get|stash\s+list|worktree\s+list|pull|show-ref|cat-file|tag\s+-l)\b",
         ),
         rx(
-            r"^(ls|cat|head|tail|wc|find|grep|pwd|which|command|basename|dirname|realpath|date|file|stat|du|df|id|whoami|printenv|ps|tree|echo|cd|true|:)\b",
+            r"^(ls|cat|head|tail|wc|find|grep|pwd|which|basename|dirname|realpath|date|file|stat|du|df|id|whoami|printenv|ps|tree|echo|cd|true|:)\b",
         ),
         rx(r"^sed\b"),
         rx(r"^(awk|tr|cut|jq|uniq|column|sort|diff|test)\b"),
@@ -219,6 +237,102 @@ fn last_path_arg(s: &str) -> Option<String> {
     parts.last().map(|p| p.to_string())
 }
 
+/// Whitespace-split respecting single/double quotes, with quotes removed. Keeps a quoted
+/// argument (e.g. a `grep` pattern `'(A|B) x'`) as one token instead of shattering it on the
+/// spaces/operators inside it — naive `split_whitespace` would mis-tokenize those.
+fn tokenize(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut buf = String::new();
+    let mut has = false;
+    let mut q: Option<char> = None;
+    for ch in s.chars() {
+        match q {
+            Some(qc) => {
+                if ch == qc {
+                    q = None;
+                } else {
+                    buf.push(ch);
+                }
+                has = true;
+            }
+            None => match ch {
+                '\'' | '"' => {
+                    q = Some(ch);
+                    has = true;
+                }
+                c if c.is_whitespace() => {
+                    if has {
+                        out.push(std::mem::take(&mut buf));
+                        has = false;
+                    }
+                }
+                c => {
+                    buf.push(c);
+                    has = true;
+                }
+            },
+        }
+    }
+    if has {
+        out.push(buf);
+    }
+    out
+}
+
+/// File operands a read command actually opens: all non-flag tokens after the command,
+/// excluding redirect operators and their target tokens (handled separately). For
+/// pattern-first readers the leading pattern/script operand is dropped.
+fn read_operands(s: &str, skip_pattern: bool) -> Vec<String> {
+    let toks = tokenize(s);
+    let mut operands = Vec::new();
+    let mut skip_next = false;
+    for tok in toks.iter().skip(1) {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if tok.starts_with('-') || tok == "&" || tok == "|" || tok == ";" {
+            continue;
+        }
+        if tok.contains('<') || tok.contains('>') {
+            // a bare redirect operator (`>`, `2>`, `>>`, `<`) consumes the next token as its
+            // target; an attached one (`2>/dev/null`) carries its own — either way, not an operand
+            let bare = tok.trim_start_matches(|c: char| c.is_ascii_digit());
+            if matches!(bare, "<" | ">" | ">>" | "<<" | "&>" | ">&") {
+                skip_next = true;
+            }
+            continue;
+        }
+        operands.push(tok.clone());
+    }
+    if skip_pattern && !operands.is_empty() {
+        operands.remove(0);
+    }
+    operands
+}
+
+/// `< file` input-redirect targets (contents flow into the command as a read).
+fn input_redir_targets(seg: &str) -> Vec<String> {
+    INPUT_REDIR
+        .captures_iter(seg)
+        .map(|c| c[1].trim_matches(['"', '\'']).to_string())
+        .collect()
+}
+
+/// Strip transparent wrappers (`command`, `env`, `nohup`, `timeout N`, `nice -n N`, …) and
+/// env-assignment prefixes, repeatedly, so the wrapped command is what gets classified.
+fn strip_prefixes(seg: &str) -> String {
+    let mut s = seg.trim().to_string();
+    for _ in 0..6 {
+        let next = strip_env(&WRAPPER.replace(&s, ""));
+        if next == s {
+            break;
+        }
+        s = next;
+    }
+    s
+}
+
 fn classify_write(
     target: &str,
     exec_base: &str,
@@ -255,7 +369,10 @@ fn classify_segment(
     if has_expansion(seg) {
         return Decision::Pass;
     }
-    if seg.contains('(') || seg.contains(')') {
+    // Real subshells/command-subst are too complex to reason about → pass. Quoted parens
+    // (e.g. a `grep -E '(A|B)'` pattern) are not grouping, so strip quotes before this check.
+    let unquoted = SINGLE_QUOTED.replace_all(seg, " ");
+    if unquoted.contains('(') || unquoted.contains(')') {
         return Decision::Pass;
     }
 
@@ -267,8 +384,14 @@ fn classify_segment(
             classify_write(&t, &exec_dir, root, patterns, regexes, resolve, protected),
         );
     }
+    // `< secret` feeds a file's contents into any command → gate it as a read.
+    for t in input_redir_targets(seg) {
+        if is_sensitive(Some(&t), patterns) {
+            worst = worsen(worst, Decision::Ask);
+        }
+    }
 
-    let s = strip_env(seg);
+    let s = strip_prefixes(seg);
     if FILE_WRITE.is_match(&s) {
         let v = match last_path_arg(&s) {
             Some(t) => classify_write(&t, &exec_dir, root, patterns, regexes, resolve, protected),
@@ -276,14 +399,22 @@ fn classify_segment(
         };
         return worsen(worst, v);
     }
-    // Content-dumping read → gate its file target (sed -i is a write, handled elsewhere).
-    // Without this, an agent blocked from `Read .env` just runs `cat .env`.
+    // Content-dumping read → gate every file operand (sed -i is a write, handled elsewhere).
+    // Without this, an agent blocked from `Read .env` just runs `cat .env` (or `cat a .env`).
     if READ_CMDS.is_match(&s) && !SED_INPLACE.is_match(&s) {
-        let v = match last_path_arg(&s) {
-            Some(t) if is_sensitive(Some(&t), patterns) => Decision::Ask,
-            _ => Decision::Allow, // reading a non-secret (or stdin) is safe
+        let sensitive = read_operands(&s, PATTERN_READ.is_match(&s))
+            .iter()
+            .any(|t| is_sensitive(Some(t), patterns));
+        let v = if sensitive {
+            Decision::Ask
+        } else {
+            Decision::Allow // reading a non-secret (or stdin) is safe
         };
         return worsen(worst, v);
+    }
+    // `find … -exec/-ok <cmd>` runs a sub-command that can dump contents; SAFE would allow it.
+    if FIND_EXEC.is_match(&s) && tokenize(&s).iter().any(|t| is_sensitive(Some(t), patterns)) {
+        return worsen(worst, Decision::Ask);
     }
     let safe = SAFE.iter().any(|r| r.is_match(&s)) && !SED_INPLACE.is_match(&s);
     if safe {
@@ -496,9 +627,25 @@ mod tests {
             "cat kubeconfig",
             "jq .apiKey credentials.json", // transformer that prints file contents
             "sort app.key",
-            "tr a-z A-Z < .env", // input-redirect: file is the last token → gated
+            "tr a-z A-Z < .env", // input-redirect (spaced)
             "base64 < id_rsa",   // ditto
             "diff old.txt .env", // prints differing secret lines
+            // bypass variants (ultrareview merged_bug_001) — all must still ask:
+            "cat .env README.md",               // secret not the last operand
+            "cat README.md .env",               // secret is the last operand
+            "diff .env old.txt",                // reversed operand order
+            "cat .env 2>/dev/null",             // trailing redirect token
+            "cat .env > /tmp/x",                // secret read + write elsewhere
+            "command cat .env",                 // POSIX alias-bypass wrapper
+            "env cat .env",                     // bare env wrapper (no NAME=VAL)
+            "timeout 5 cat .env",               // timeout wrapper
+            "nohup base64 id_rsa",              // nohup wrapper
+            "nice -n 10 cat .env",              // nice wrapper
+            "grep -E '(AKIA|SECRET)' .env",     // quoted-paren pattern (paren short-circuit)
+            "cat <.env",                        // adjacent input redirect
+            "< .env cat",                       // leading input redirect
+            "find . -name .env -exec cat {} +", // find -exec dumper
+            "find /h -name id_rsa -execdir base64 {} +",
         ] {
             assert_eq!(d(c, ROOT), Decision::Ask, "{c}");
         }
@@ -519,6 +666,12 @@ mod tests {
             "jq . package.json",
             "sort names.txt | uniq",
             "cat a.md | tr -s ' '",
+            // wrappers / find over a non-secret must not over-ask
+            "command ls",
+            "env cat README.md",
+            "timeout 5 cat README.md",
+            "grep -E '(foo|bar)' README.md", // quoted-paren pattern, ordinary file
+            "find . -name '*.rs' -exec grep TODO {} +",
         ] {
             assert_eq!(d(c, ROOT), Decision::Allow, "{c}");
         }

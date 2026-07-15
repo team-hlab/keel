@@ -10,11 +10,15 @@ the version — see [docs/RELEASING.md](docs/RELEASING.md).
 - **Shell content-reads of secrets now ask, closing the `Read`-tool bypass.** An agent
   blocked from `Read .env` could previously just run `cat .env` — content-dumping commands
   (`cat`, `head`, `tail`, `less`, `nl`, `tac`, `xxd`, `od`, `base64`, `strings`, `grep`,
-  `rg`, `awk`, `sed`, `cut`, …) were treated as unconditionally safe. Their file target is
-  now checked for sensitivity: sensitive → **ask**, non-secret (or stdin/pattern-only) →
-  **allow**. Metadata-only commands (`ls`, `stat`, `file`, `find`) don't reveal contents and
-  stay allow. This makes secret-read gating uniform across all three agents (Claude, Codex —
-  which reads *only* via the shell — and Antigravity).
+  `rg`, `awk`, `sed`, `cut`, …) were treated as unconditionally safe. **Every** file operand
+  is now checked for sensitivity: sensitive → **ask**, non-secret (or stdin/pattern-only) →
+  **allow**. Metadata-only commands (`ls`, `stat`, `file`) don't reveal contents and stay
+  allow. The check is quote-aware and resists the obvious dodges: multiple operands
+  (`cat a .env`), trailing redirects (`cat .env 2>/dev/null`), input redirects
+  (`cat <.env`, `< .env cat`), quoted-paren patterns (`grep -E '(A|B)' .env`), transparent
+  wrappers (`command`/`env`/`nohup`/`timeout`/`nice cat .env`), and `find … -exec` dumpers.
+  This makes secret-read gating uniform across all three agents (Claude, Codex — which reads
+  *only* via the shell — and Antigravity).
 - **Expanded the default sensitive-file set** beyond `.env`/`*.key`/`*.pem`/`credentials*`/
   `*secret*` to cover SSH/PGP keys (`id_rsa*`, `id_ed25519*`, `id_ecdsa*`, `id_dsa*`,
   `*.ppk`), keystores/vaults (`*.p12`, `*.pfx`, `*.keystore`, `*.jks`, `*.kdbx`), and
