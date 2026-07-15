@@ -34,6 +34,17 @@ static DEVNULL: LazyLock<Regex> = LazyLock::new(|| rx(r"\d*>\s*/dev/null"));
 static REDIR: LazyLock<Regex> = LazyLock::new(|| rx(r">{1,2}\s*([^\s;|&]+)"));
 static TEE: LazyLock<Regex> = LazyLock::new(|| rx(r"\|\s*tee\s+(?:-a\s+)?([^\s;|&]+)"));
 static SED_INPLACE: LazyLock<Regex> = LazyLock::new(|| rx(r"^sed\s+-i"));
+// Content-dumping reads. These print a file's bytes (the exfil path an agent falls back to
+// when the Read tool is gated: `cat .env`, `base64 id_rsa`, `jq .k credentials.json`), so
+// their file target is checked for sensitivity even though the command itself is harmless.
+// Transformers that read stdin (`tr`, `sort`) are included too: with `cmd < .env` the file is
+// the last token, so the target check catches the input-redirect path as well. Metadata-only
+// readers (ls/stat/file/find/wc) stay in SAFE and skip the check — they don't reveal contents.
+static READ_CMDS: LazyLock<Regex> = LazyLock::new(|| {
+    rx(
+        r"^(cat|head|tail|less|more|nl|tac|xxd|od|hexdump|base64|base32|strings|grep|egrep|fgrep|rg|awk|sed|cut|sort|uniq|tr|jq|column|rev|fold|comm|join|paste|diff)\b",
+    )
+});
 
 static SAFE: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     vec![
@@ -265,6 +276,15 @@ fn classify_segment(
         };
         return worsen(worst, v);
     }
+    // Content-dumping read → gate its file target (sed -i is a write, handled elsewhere).
+    // Without this, an agent blocked from `Read .env` just runs `cat .env`.
+    if READ_CMDS.is_match(&s) && !SED_INPLACE.is_match(&s) {
+        let v = match last_path_arg(&s) {
+            Some(t) if is_sensitive(Some(&t), patterns) => Decision::Ask,
+            _ => Decision::Allow, // reading a non-secret (or stdin) is safe
+        };
+        return worsen(worst, v);
+    }
     let safe = SAFE.iter().any(|r| r.is_match(&s)) && !SED_INPLACE.is_match(&s);
     if safe {
         return worst;
@@ -454,6 +474,54 @@ mod tests {
         assert_eq!(d("echo x > .env", ROOT), Decision::Ask);
         assert_eq!(d("echo x > worktrees/f/.env.local", ROOT), Decision::Ask);
         assert_eq!(d("ls | tee server.key", ROOT), Decision::Ask);
+    }
+
+    #[test]
+    fn read_secret_ask() {
+        // content-dumping a secret → ask (closes the `Read .env` → `cat .env` bypass)
+        for c in [
+            "cat .env",
+            "cat x/.env",
+            "cat ~/.ssh/id_rsa",
+            "head server.pem",
+            "tail -f app.key",
+            "less credentials.json",
+            "base64 id_ed25519",
+            "xxd cert.p12",
+            "strings vault.kdbx",
+            "grep AKIA credentials.json", // pattern is first, file is last → gated
+            "cat public.txt | grep pw .env", // secret target anywhere in a pipe
+            "cat .npmrc",
+            "cat .netrc",
+            "cat kubeconfig",
+            "jq .apiKey credentials.json", // transformer that prints file contents
+            "sort app.key",
+            "tr a-z A-Z < .env", // input-redirect: file is the last token → gated
+            "base64 < id_rsa",   // ditto
+            "diff old.txt .env", // prints differing secret lines
+        ] {
+            assert_eq!(d(c, ROOT), Decision::Ask, "{c}");
+        }
+    }
+
+    #[test]
+    fn read_nonsecret_allow() {
+        // reads of ordinary files (and stdin/pattern-only reads) stay allowed — no fatigue
+        for c in [
+            "cat README.md",
+            "head -n 20 src/main.rs",
+            "base64 logo.png",
+            "grep secret notes.txt", // "secret" is the pattern, not the file → allow
+            "grep -r AKIA .",        // no file target
+            "cat",                   // stdin
+            "xxd binary.bin",
+            "sed -n 1p Cargo.toml",
+            "jq . package.json",
+            "sort names.txt | uniq",
+            "cat a.md | tr -s ' '",
+        ] {
+            assert_eq!(d(c, ROOT), Decision::Allow, "{c}");
+        }
     }
 
     #[test]

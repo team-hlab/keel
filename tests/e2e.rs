@@ -163,6 +163,15 @@ fn pretooluse_files_and_bash() {
         ),
         "allow"
     );
+    // shell content-read of a secret asks, same as the Read tool (no `cat .env` bypass)
+    assert_eq!(
+        pre("claude", &payload("Bash", "command", "cat x/.env", r), r),
+        "ask"
+    );
+    assert_eq!(
+        pre("claude", &payload("Bash", "command", "cat README.md", r), r),
+        "allow"
+    );
     assert_eq!(
         pre("claude", &payload("Bash", "command", "rm -rf /", r), r),
         "deny"

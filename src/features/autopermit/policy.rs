@@ -6,7 +6,37 @@ use crate::model::Decision;
 
 pub const READ_TOOLS: &[&str] = &["Read", "Glob", "Grep", "NotebookRead"];
 pub const WRITE_TOOLS: &[&str] = &["Edit", "MultiEdit", "Write", "NotebookEdit"];
-pub const DEFAULT_SENSITIVE: &[&str] = &[".env*", "*.key", "*.pem", "credentials*", "*secret*"];
+// Basename globs for confidential files. Location-agnostic on purpose: `.env` under a
+// worktree is as sensitive as one under $HOME, and shell reads have no reliable dir context.
+// Distinctive key/credential basenames (id_rsa, .npmrc, …) also cover the common
+// `cat ~/.ssh/id_rsa` / `cat ~/.aws/credentials` exfil paths without path-prefix matching.
+pub const DEFAULT_SENSITIVE: &[&str] = &[
+    // secrets / env / generic
+    ".env*",
+    "credentials*",
+    "*secret*",
+    ".netrc",
+    ".npmrc",
+    ".pgpass",
+    ".htpasswd",
+    // private keys / SSH
+    "*.key",
+    "*.pem",
+    "id_rsa*",
+    "id_ed25519*",
+    "id_ecdsa*",
+    "id_dsa*",
+    "*.ppk",
+    // certs / keystores / vaults
+    "*.pfx",
+    "*.p12",
+    "*.keystore",
+    "*.jks",
+    "*.kdbx",
+    // cloud / cluster / vpn
+    "kubeconfig",
+    "*.ovpn",
+];
 
 /// Compile a basename glob (`*`, `?`) into a case-insensitive anchored regex.
 pub fn glob_to_regex(glob: &str) -> Regex {
@@ -192,6 +222,16 @@ mod tests {
             "app-secrets.yaml",
             "MY_SECRET.txt", // case-insensitive
             "a/.env",
+            // expanded set: SSH keys, keystores, cred/vpn/cluster configs
+            "/home/u/.ssh/id_rsa",
+            "id_ed25519",
+            "vault.kdbx",
+            "cert.p12",
+            "site.pfx",
+            ".npmrc",
+            ".netrc",
+            "kubeconfig",
+            "client.ovpn",
         ] {
             assert!(is_sensitive(Some(f), &p), "{f} should be sensitive");
         }

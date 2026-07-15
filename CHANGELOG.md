@@ -7,6 +7,21 @@ the version — see [docs/RELEASING.md](docs/RELEASING.md).
 ## [Unreleased]
 
 ### Fixed
+- **Shell content-reads of secrets now ask, closing the `Read`-tool bypass.** An agent
+  blocked from `Read .env` could previously just run `cat .env` — content-dumping commands
+  (`cat`, `head`, `tail`, `less`, `nl`, `tac`, `xxd`, `od`, `base64`, `strings`, `grep`,
+  `rg`, `awk`, `sed`, `cut`, …) were treated as unconditionally safe. Their file target is
+  now checked for sensitivity: sensitive → **ask**, non-secret (or stdin/pattern-only) →
+  **allow**. Metadata-only commands (`ls`, `stat`, `file`, `find`) don't reveal contents and
+  stay allow. This makes secret-read gating uniform across all three agents (Claude, Codex —
+  which reads *only* via the shell — and Antigravity).
+- **Expanded the default sensitive-file set** beyond `.env`/`*.key`/`*.pem`/`credentials*`/
+  `*secret*` to cover SSH/PGP keys (`id_rsa*`, `id_ed25519*`, `id_ecdsa*`, `id_dsa*`,
+  `*.ppk`), keystores/vaults (`*.p12`, `*.pfx`, `*.keystore`, `*.jks`, `*.kdbx`), and
+  credential/cluster/VPN configs (`.npmrc`, `.netrc`, `.pgpass`, `.htpasswd`, `kubeconfig`,
+  `*.ovpn`). Distinctive basenames also cover the common `cat ~/.ssh/id_rsa` /
+  `cat ~/.aws/credentials` exfil paths. (Setting `sensitiveFilePatterns` still replaces the
+  set wholesale.)
 - **Antigravity content-read tools are now gated.** `view_file` / `search_in_file` /
   `view_file_outline` (via `args.AbsolutePath`) and `view_code_item` (via `args.File`) are
   normalized to `Read` and added to the hook matcher, so read gating (secret files → ask)
