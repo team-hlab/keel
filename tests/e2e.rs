@@ -517,3 +517,199 @@ fn cli_version() {
     assert!(o.stdout.trim().starts_with("keel "), "{}", o.stdout);
     assert!(o.stdout.contains(env!("CARGO_PKG_VERSION")));
 }
+
+// ───────────────────────── carryover (binary-level) ─────────────────────────
+
+/// Read the single snapshot.json under `<KEEL_HOME>/.keel/carryover/<root_hash>/`.
+fn read_snapshot(home: &std::path::Path) -> Value {
+    let dir = fs::read_dir(home.join(".keel/carryover"))
+        .expect("carryover store dir")
+        .next()
+        .expect("one root subdir")
+        .unwrap()
+        .path();
+    serde_json::from_str(&fs::read_to_string(dir.join("snapshot.json")).unwrap()).unwrap()
+}
+
+fn injected_context(out: &Out) -> String {
+    let v: Value = serde_json::from_str(out.stdout.trim())
+        .unwrap_or_else(|_| panic!("SessionStart stdout not JSON: {:?}", out.stdout));
+    v["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+/// Codex path: inline payloads accumulate into the store, then SessionStart injects it.
+#[test]
+fn carryover_codex_incremental_roundtrip() {
+    let home = tmp("cvhome");
+    let root = project_root();
+    let (rp, hp) = (root.to_str().unwrap(), home.to_str().unwrap());
+    let env = &[("KEEL_HOME", hp), ("KEEL_ROOT", rp)];
+
+    run(
+        &["carryover-hook", "codex", "UserPromptSubmit"],
+        &format!(r#"{{"cwd":"{rp}","prompt":"wire the codex path"}}"#),
+        env,
+    );
+    run(
+        &["carryover-hook", "codex", "PreToolUse"],
+        &format!(r#"{{"cwd":"{rp}","tool_name":"Edit","tool_input":{{"file_path":"/r/x.rs"}}}}"#),
+        env,
+    );
+    run(
+        &["carryover-hook", "codex", "PreToolUse"], // Read → must be dropped
+        &format!(r#"{{"cwd":"{rp}","tool_name":"Read","tool_input":{{"file_path":"/r/y.rs"}}}}"#),
+        env,
+    );
+    run(
+        &["carryover-hook", "codex", "Stop"],
+        &format!(r#"{{"cwd":"{rp}","last_assistant_message":"did the thing"}}"#),
+        env,
+    );
+
+    let snap = read_snapshot(&home);
+    assert_eq!(snap["goal"][0], "wire the codex path");
+    assert_eq!(snap["files"], serde_json::json!(["/r/x.rs"])); // Read dropped
+    assert_eq!(snap["result"], "did the thing");
+    assert_eq!(snap["by"], "codex"); // provenance recorded correctly
+
+    let out = run(
+        &["carryover-hook", "codex", "SessionStart"],
+        &format!(r#"{{"cwd":"{rp}"}}"#),
+        env,
+    );
+    let ctx = injected_context(&out);
+    assert!(ctx.contains("wire the codex path"), "{ctx}");
+    assert!(ctx.contains("Verify, don't trust"), "{ctx}");
+    // /r/x.rs doesn't exist on disk → drift is flagged ("disk state wins")
+    assert!(ctx.contains("Drift since capture"), "{ctx}");
+}
+
+/// A stale snapshot (older than the freshness window) must not be injected.
+#[test]
+fn carryover_stale_snapshot_not_injected() {
+    let home = tmp("cvhome4");
+    let root = project_root();
+    let (rp, hp) = (root.to_str().unwrap(), home.to_str().unwrap());
+    let env = &[("KEEL_HOME", hp), ("KEEL_ROOT", rp)];
+
+    run(
+        &["carryover-hook", "codex", "UserPromptSubmit"],
+        &format!(r#"{{"cwd":"{rp}","prompt":"old work"}}"#),
+        env,
+    );
+    // backdate the snapshot far past the freshness window
+    let dir = fs::read_dir(home.join(".keel/carryover"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let p = dir.join("snapshot.json");
+    let mut v: Value = serde_json::from_str(&fs::read_to_string(&p).unwrap()).unwrap();
+    v["updated"] = serde_json::json!(1000u64);
+    fs::write(&p, v.to_string()).unwrap();
+
+    let out = run(
+        &["carryover-hook", "codex", "SessionStart"],
+        &format!(r#"{{"cwd":"{rp}"}}"#),
+        env,
+    );
+    assert!(
+        out.stdout.trim().is_empty(),
+        "stale must not inject: {:?}",
+        out.stdout
+    );
+}
+
+/// Secrets in a captured prompt are redacted on disk (never persisted plaintext).
+#[test]
+fn carryover_redacts_secrets_on_disk() {
+    let home = tmp("cvhome5");
+    let root = project_root();
+    let (rp, hp) = (root.to_str().unwrap(), home.to_str().unwrap());
+    run(
+        &["carryover-hook", "codex", "UserPromptSubmit"],
+        &format!(r#"{{"cwd":"{rp}","prompt":"key is AKIAABCDEFGHIJKLMNOP keep it"}}"#),
+        &[("KEEL_HOME", hp), ("KEEL_ROOT", rp)],
+    );
+    let raw = {
+        let dir = fs::read_dir(home.join(".keel/carryover"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        fs::read_to_string(dir.join("snapshot.json")).unwrap()
+    };
+    assert!(raw.contains("[redacted]"), "{raw}");
+    assert!(
+        !raw.contains("AKIAABCDEFGHIJKLMNOP"),
+        "secret leaked to disk: {raw}"
+    );
+}
+
+/// Cross-vendor: Claude batch-captures a transcript, a Codex SessionStart injects the same store.
+#[test]
+fn carryover_claude_capture_codex_inject() {
+    let home = tmp("cvhome2");
+    let root = project_root();
+    let (rp, hp) = (root.to_str().unwrap(), home.to_str().unwrap());
+    let env = &[("KEEL_HOME", hp), ("KEEL_ROOT", rp)];
+
+    let tdir = tmp("tx");
+    let tpath = tdir.join("t.jsonl");
+    let lines = [
+        r#"{"type":"user","gitBranch":"main","cwd":"/r","message":{"role":"user","content":"add the parser"}}"#,
+        r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Write","input":{"file_path":"/r/p.rs"}}]}}"#,
+        r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"parser added"}]}}"#,
+    ]
+    .join("\n");
+    fs::write(&tpath, lines).unwrap();
+
+    run(
+        &["carryover-hook", "claude", "SessionEnd"],
+        &format!(
+            r#"{{"cwd":"{rp}","transcript_path":"{}"}}"#,
+            tpath.to_str().unwrap()
+        ),
+        env,
+    );
+
+    let snap = read_snapshot(&home);
+    assert_eq!(snap["goal"][0], "add the parser");
+    assert_eq!(snap["result"], "parser added");
+    assert_eq!(snap["by"], "claude");
+
+    let out = run(
+        &["carryover-hook", "codex", "SessionStart"],
+        &format!(r#"{{"cwd":"{rp}"}}"#),
+        env,
+    );
+    let ctx = injected_context(&out);
+    assert!(
+        ctx.contains("add the parser") && ctx.contains("parser added"),
+        "{ctx}"
+    );
+}
+
+/// An empty store must inject nothing (no hollow "resuming prior session" note).
+#[test]
+fn carryover_empty_store_injects_nothing() {
+    let home = tmp("cvhome3");
+    let root = project_root();
+    let (rp, hp) = (root.to_str().unwrap(), home.to_str().unwrap());
+    let out = run(
+        &["carryover-hook", "codex", "SessionStart"],
+        &format!(r#"{{"cwd":"{rp}"}}"#),
+        &[("KEEL_HOME", hp), ("KEEL_ROOT", rp)],
+    );
+    assert_eq!(out.code, 0);
+    assert!(
+        out.stdout.trim().is_empty(),
+        "empty store must not inject: {:?}",
+        out.stdout
+    );
+}

@@ -23,6 +23,17 @@ static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
 const STAGES: &[&str] = &["PreToolUse"];
 const WRITE_TOOLS: &[&str] = &["Write", "Edit", "MultiEdit", "NotebookEdit"];
 
+/// Replace anything matching a credential pattern with `[redacted]`, using the same
+/// patterns the feature flags on. Reused by carryover so stored context never persists
+/// secrets to disk.
+pub fn redact(text: &str) -> String {
+    let mut out = text.to_string();
+    for r in PATTERNS.iter() {
+        out = r.replace_all(&out, "[redacted]").into_owned();
+    }
+    out
+}
+
 pub struct SecretScan;
 
 impl SecretScan {
