@@ -83,7 +83,7 @@ fn reason(d: Decision) -> &'static str {
     match d {
         Decision::Allow => "safe read / worktree write / read-only command",
         Decision::Deny => "blocked — protected path or destructive command",
-        Decision::Ask => "confirmation required — secret or unverified write",
+        Decision::Ask => "confirmation required — secret, or unverified read/write",
         Decision::Pass => "",
     }
 }

@@ -4,10 +4,13 @@
 //! input is `toolCall.name` + `toolCall.args` (camelCase) with `workspacePaths`; the
 //! shell tool is `run_command` with the command in `args.CommandLine`; output is
 //! `{"decision": "allow"|"deny"|"ask", "reason": …}` and a non-zero exit = deny (so keel
-//! always emits JSON + exits 0). Write tools are normalized too — `write_to_file`,
-//! `replace_file_content`, `multi_replace_file_content` — so file gating + secret-scan apply.
-//! keel registers under the `keel` namespace in `~/.gemini/config/hooks.json` with a matcher
-//! on these tool names (see agent.rs), so Antigravity fires keel for them.
+//! always emits JSON + exits 0). Write tools (`write_to_file`, `replace_file_content`,
+//! `multi_replace_file_content`) and content-read tools (`view_file`, `search_in_file`,
+//! `view_file_outline` via `args.AbsolutePath`; `view_code_item` via `args.File`;
+//! `grep_search` via `args.SearchPath`) are normalized into keel's neutral model so
+//! file/secret gating applies. keel registers under
+//! the `keel` namespace in `~/.gemini/config/hooks.json` with a matcher on these tool names
+//! (see agent.rs), so Antigravity fires keel for them.
 
 use serde_json::{json, Map, Value};
 
@@ -93,6 +96,13 @@ fn normalize(tool: Option<String>, args: Value) -> (Option<String>, Value) {
             m.insert("edits".into(), Value::Array(edits));
             Some(("MultiEdit", Value::Object(m)))
         }
+        // content reads (verified args): most use AbsolutePath, view_code_item uses File.
+        Some("view_file" | "search_in_file" | "view_file_outline") => {
+            Some(("Read", arg_obj(&[("file_path", s("AbsolutePath"))])))
+        }
+        Some("view_code_item") => Some(("Read", arg_obj(&[("file_path", s("File"))]))),
+        // grep within a file reads its content (SearchPath may be a dir → not sensitive → allow)
+        Some("grep_search") => Some(("Read", arg_obj(&[("file_path", s("SearchPath"))]))),
         _ => None,
     };
     match mapped {
@@ -177,6 +187,33 @@ mod tests {
             edits[0].get("new_string").and_then(|v| v.as_str()),
             Some("a")
         );
+    }
+
+    #[test]
+    fn normalizes_read_tools() {
+        // view_file → Read{file_path} from AbsolutePath (so read/secret gating applies)
+        let e = parse(
+            &json!({"toolCall":{"name":"view_file","args":{"AbsolutePath":"/r/.env","StartLine":1}}}),
+            "PreToolUse",
+        );
+        assert_eq!(e.tool.as_deref(), Some("Read"));
+        assert_eq!(e.file_path(), Some("/r/.env"));
+
+        // view_code_item uses the `File` arg, not AbsolutePath
+        let e = parse(
+            &json!({"toolCall":{"name":"view_code_item","args":{"File":"/r/a.rs","NodePaths":["m::f"]}}}),
+            "PreToolUse",
+        );
+        assert_eq!(e.tool.as_deref(), Some("Read"));
+        assert_eq!(e.file_path(), Some("/r/a.rs"));
+
+        // grep_search reads via SearchPath
+        let e = parse(
+            &json!({"toolCall":{"name":"grep_search","args":{"SearchPath":"/r/id_rsa","Query":"x"}}}),
+            "PreToolUse",
+        );
+        assert_eq!(e.tool.as_deref(), Some("Read"));
+        assert_eq!(e.file_path(), Some("/r/id_rsa"));
     }
 
     #[test]
