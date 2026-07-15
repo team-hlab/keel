@@ -23,11 +23,19 @@ static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
 const STAGES: &[&str] = &["PreToolUse"];
 const WRITE_TOOLS: &[&str] = &["Write", "Edit", "MultiEdit", "NotebookEdit"];
 
+// Full multi-line PEM block — the `PATTERNS` header regex only flags (`is_match`) the BEGIN
+// line, which is enough for the Ask verdict but would leave the key body behind on redaction.
+// redact() runs this first so the entire block (header + base64 body + footer) is scrubbed.
+static PEM_BLOCK: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----")
+        .unwrap()
+});
+
 /// Replace anything matching a credential pattern with `[redacted]`, using the same
-/// patterns the feature flags on. Reused by carryover so stored context never persists
-/// secrets to disk.
+/// patterns the feature flags on (plus the full PEM block). Reused by carryover so stored
+/// context never persists secrets to disk. Best-effort — known patterns only.
 pub fn redact(text: &str) -> String {
-    let mut out = text.to_string();
+    let mut out = PEM_BLOCK.replace_all(text, "[redacted]").into_owned();
     for r in PATTERNS.iter() {
         out = r.replace_all(&out, "[redacted]").into_owned();
     }
@@ -139,5 +147,17 @@ mod tests {
         assert!(f
             .evaluate(&ev("Read", json!({ "file_path": "a" })))
             .is_none());
+    }
+
+    #[test]
+    fn redact_scrubs_full_pem_block() {
+        let body = "MIIEpAIBAAKCAQEAbase64keymaterialthatmustnotsurvive0123456789";
+        let pem = format!("prefix\n-----BEGIN RSA PRIVATE KEY-----\n{body}\n-----END RSA PRIVATE KEY-----\nsuffix");
+        let out = redact(&pem);
+        assert!(out.contains("[redacted]"));
+        assert!(!out.contains(body), "key body survived redaction: {out}");
+        assert!(!out.contains("BEGIN RSA PRIVATE KEY"));
+        // inline tokens still scrubbed too
+        assert!(!redact("k AKIAABCDEFGHIJKLMNOP z").contains("AKIA"));
     }
 }

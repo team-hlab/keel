@@ -18,12 +18,11 @@
 //!
 //! Everything else is dropped at capture time — never stored.
 
-use std::hash::{Hash, Hasher};
-
 use serde_json::{json, Value};
 
 use crate::features::secret_scan;
-use crate::{agent, runtime};
+use crate::model::Event;
+use crate::{adapters, agent, runtime};
 
 /// Tools that change the tree. A `PreToolUse` call to anything else is exploration noise.
 const MUTATING: &[&str] = &["Edit", "MultiEdit", "Write", "NotebookEdit"];
@@ -163,10 +162,16 @@ fn collect_mutated(rec: &Value, out: &mut Vec<String>) {
     }
 }
 
+/// Stable-by-contract hash for the on-disk store key (FNV-1a). NOT `DefaultHasher`, whose
+/// algorithm the stdlib may change across releases — that would silently orphan every
+/// snapshot on a toolchain bump.
 fn root_hash(cwd: &str) -> String {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    cwd.hash(&mut h);
-    format!("{:016x}", h.finish())[..12].to_string()
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in cwd.as_bytes() {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{h:016x}")[..12].to_string()
 }
 
 fn truncate(s: &str, n: usize) -> String {
@@ -482,34 +487,21 @@ fn git_branch(root: &str) -> Option<String> {
 /// Normalized field access across vendors — Codex uses `cwd`/`tool_name`/`tool_input`;
 /// Antigravity uses `workspacePaths`/`toolCall.name`/`toolCall.args` (best-effort per the
 /// antigravity adapter — docs unscrapeable, field names version-sensitive).
-fn payload_cwd(p: &Value) -> Option<&str> {
-    p.get("cwd").and_then(Value::as_str).or_else(|| {
-        p.get("workspacePaths")
-            .and_then(Value::as_array)
-            .and_then(|a| a.first())
-            .and_then(Value::as_str)
-    })
-}
-fn payload_tool_name(p: &Value) -> &str {
-    p.get("tool_name")
-        .and_then(Value::as_str)
-        .or_else(|| {
-            p.get("toolCall")
-                .and_then(|t| t.get("name"))
-                .and_then(Value::as_str)
-        })
-        .unwrap_or("")
-}
-fn payload_file(p: &Value) -> Option<&str> {
-    p.get("tool_input")
-        .and_then(|i| i.get("file_path"))
-        .and_then(Value::as_str)
-        .or_else(|| {
-            p.get("toolCall")
-                .and_then(|t| t.get("args"))
-                .and_then(|a| a.get("file_path"))
-                .and_then(Value::as_str)
-        })
+/// Mutated file paths from a *normalized* Event. The adapters already translate each
+/// vendor's edit tool into keel's neutral model — Codex `apply_patch` → `Write` with every
+/// patched path under `file_paths`; Antigravity `write_to_file`/`TargetFile` → `Write.file_path`
+/// — so carryover reuses that instead of re-guessing raw vendor shapes.
+fn mutated_paths(event: &Event) -> Vec<String> {
+    if !event.tool.as_deref().is_some_and(|t| MUTATING.contains(&t)) {
+        return Vec::new();
+    }
+    if let Some(arr) = event.tool_input.get("file_paths").and_then(Value::as_array) {
+        return arr
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
+    }
+    event.file_path().map(String::from).into_iter().collect()
 }
 
 /// SessionStart injection payload. Claude and Codex both read
@@ -535,8 +527,9 @@ fn render_injection(_platform: &str, digest: &str) -> String {
 /// injects into any other — that is the cross-vendor carry. Fails open on any error.
 pub fn run_hook(platform: &str, stage: &str) -> i32 {
     let payload = runtime::read_input().unwrap_or(Value::Null);
-    let cwd = payload_cwd(&payload);
-    let dir = store_dir(cwd);
+    // Normalize via the vendor adapter: cwd (Antigravity uses workspacePaths) + neutral tool.
+    let event = adapters::parse(platform, &payload, stage);
+    let dir = store_dir(event.cwd.as_deref());
 
     if stage == "SessionStart" {
         // Render fresh from the snapshot (source of truth).
@@ -550,7 +543,7 @@ pub fn run_hook(platform: &str, stage: &str) -> i32 {
             }
         }
         let mut digest = snap.render_digest();
-        if let Some(drift) = drift_note(&snap, cwd) {
+        if let Some(drift) = drift_note(&snap, event.cwd.as_deref()) {
             digest.push_str(&drift); // disk-state-wins warnings
         }
         print!("{}", render_injection(platform, &digest));
@@ -558,7 +551,11 @@ pub fn run_hook(platform: &str, stage: &str) -> i32 {
     }
 
     if platform == "claude" {
-        // BATCH: Claude's transcript carries prompts + answers + tool calls in one file.
+        // BATCH: only on session-boundary stages — else a mis-wired PreToolUse would re-read
+        // the whole transcript on every tool call.
+        if !matches!(stage, "Stop" | "SessionEnd" | "PreCompact") {
+            return 0;
+        }
         if let Some(tp) = payload.get("transcript_path").and_then(Value::as_str) {
             if let Ok(records) = load_jsonl(tp) {
                 let (snap, _) = capture(records);
@@ -570,21 +567,24 @@ pub fn run_hook(platform: &str, stage: &str) -> i32 {
 
     // INCREMENTAL: Codex/Antigravity deliver the pieces inline, one hook at a time.
     let mut snap = load_snapshot(&dir);
-    let root = runtime::find_root(cwd);
     if snap.root.is_none() {
-        snap.root = cwd.map(String::from);
+        snap.root = event.cwd.clone();
     }
     if snap.root_hash.is_empty() {
-        snap.root_hash = root_hash(&root);
+        snap.root_hash = root_hash(&event.root);
     }
     if snap.branch.is_none() {
-        snap.branch = git_branch(&root);
+        snap.branch = git_branch(&event.root);
     }
-    snap.by = Some(platform.to_string()); // provenance: codex / antigravity
+
+    // Only persist when something was actually captured — a no-op hook (Read, missing field,
+    // unknown stage) must not re-stamp `updated` (defeating freshness) or clobber `by`.
+    let mut changed = false;
     match stage {
         "UserPromptSubmit" => {
             if let Some(p) = payload.get("prompt").and_then(Value::as_str) {
                 snap.push_prompt(p);
+                changed = true;
             }
         }
         "Stop" => {
@@ -593,20 +593,21 @@ pub fn run_hook(platform: &str, stage: &str) -> i32 {
                 .and_then(Value::as_str)
             {
                 snap.set_result(r);
+                changed = true;
             }
         }
         "PreToolUse" => {
-            // Antigravity exposes only tool calls inline (no prompt/answer hooks), so this
-            // is the one signal it can contribute: mutated files. goal/result stay empty
-            // until its transcript format is known.
-            let name = payload_tool_name(&payload);
-            if let Some(fp) = payload_file(&payload).filter(|_| MUTATING.contains(&name)) {
-                snap.push_file(fp);
+            for fp in mutated_paths(&event) {
+                snap.push_file(&fp);
+                changed = true;
             }
         }
         _ => {}
     }
-    persist(&snap, &dir);
+    if changed {
+        snap.by = Some(platform.to_string()); // provenance: codex / antigravity
+        persist(&snap, &dir);
+    }
     0
 }
 
@@ -701,24 +702,24 @@ mod tests {
         assert_eq!(s.result.as_deref(), Some("built the codex path"));
     }
 
-    // Antigravity's field names differ (toolCall.args / workspacePaths). The normalized
-    // accessors extract mutated files from its PreToolUse payloads; prompt/answer aren't
-    // inline for Antigravity, so those stay empty (honest partial capture).
+    // mutated_paths pulls every patched file from a normalized Codex apply_patch event
+    // (adapters::codex maps apply_patch → Write with `file_paths`); non-mutating tools yield none.
     #[test]
-    fn antigravity_fields_normalize() {
-        let edit = json!({
-            "workspacePaths": ["/agy/repo"],
-            "toolCall": {"name": "Edit", "args": {"file_path": "/agy/repo/x.ts"}}
-        });
-        let read = json!({
-            "workspacePaths": ["/agy/repo"],
-            "toolCall": {"name": "Read", "args": {"file_path": "/agy/repo/y.ts"}}
-        });
-        assert_eq!(payload_cwd(&edit), Some("/agy/repo"));
-        assert_eq!(payload_tool_name(&edit), "Edit");
-        assert_eq!(payload_file(&edit), Some("/agy/repo/x.ts"));
-        assert!(MUTATING.contains(&payload_tool_name(&edit)));
-        assert!(!MUTATING.contains(&payload_tool_name(&read))); // Read dropped
+    fn mutated_paths_from_normalized_event() {
+        let patch =
+            "*** Begin Patch\n*** Update File: /r/a.rs\n*** Add File: /r/b.rs\n*** End Patch";
+        let ev = adapters::parse(
+            "codex",
+            &json!({"tool_name":"apply_patch","tool_input":{"command":patch},"cwd":"/r"}),
+            "PreToolUse",
+        );
+        assert_eq!(mutated_paths(&ev), vec!["/r/a.rs", "/r/b.rs"]);
+        let read = adapters::parse(
+            "codex",
+            &json!({"tool_name":"shell","tool_input":{"command":"cat /r/a.rs"},"cwd":"/r"}),
+            "PreToolUse",
+        );
+        assert!(mutated_paths(&read).is_empty());
     }
 
     // The store is agent-agnostic: a snapshot captured under Claude round-trips through the

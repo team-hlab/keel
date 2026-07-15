@@ -553,14 +553,20 @@ fn carryover_codex_incremental_roundtrip() {
         &format!(r#"{{"cwd":"{rp}","prompt":"wire the codex path"}}"#),
         env,
     );
+    // REAL Codex edit shape: apply_patch with the V4A patch in tool_input.command
+    // (adapters::codex normalizes it → Write with the patched path).
     run(
         &["carryover-hook", "codex", "PreToolUse"],
-        &format!(r#"{{"cwd":"{rp}","tool_name":"Edit","tool_input":{{"file_path":"/r/x.rs"}}}}"#),
+        &format!(
+            r#"{{"cwd":"{rp}","tool_name":"apply_patch","tool_input":{{"command":"*** Begin Patch\n*** Update File: /r/x.rs\n@@\n+let x=1;\n*** End Patch"}}}}"#
+        ),
         env,
     );
     run(
-        &["carryover-hook", "codex", "PreToolUse"], // Read → must be dropped
-        &format!(r#"{{"cwd":"{rp}","tool_name":"Read","tool_input":{{"file_path":"/r/y.rs"}}}}"#),
+        &["carryover-hook", "codex", "PreToolUse"], // shell read → must be dropped
+        &format!(
+            r#"{{"cwd":"{rp}","tool_name":"shell","tool_input":{{"command":"cat /r/y.rs"}}}}"#
+        ),
         env,
     );
     run(
@@ -711,5 +717,66 @@ fn carryover_empty_store_injects_nothing() {
         out.stdout.trim().is_empty(),
         "empty store must not inject: {:?}",
         out.stdout
+    );
+}
+
+/// Antigravity's real write shape (`write_to_file` / `TargetFile` under `toolCall.args`,
+/// cwd from `workspacePaths`) is normalized by the adapter and captured as a mutated file.
+#[test]
+fn carryover_antigravity_write_captured() {
+    let home = tmp("cvhome6");
+    let root = project_root();
+    let (rp, hp) = (root.to_str().unwrap(), home.to_str().unwrap());
+    run(
+        &["carryover-hook", "antigravity", "PreToolUse"],
+        &format!(
+            r#"{{"workspacePaths":["{rp}"],"toolCall":{{"name":"write_to_file","args":{{"TargetFile":"/r/app.ts","CodeContent":"x=1"}}}}}}"#
+        ),
+        &[("KEEL_HOME", hp), ("KEEL_ROOT", rp)],
+    );
+    let snap = read_snapshot(&home);
+    assert_eq!(snap["files"], serde_json::json!(["/r/app.ts"]));
+    assert_eq!(snap["by"], "antigravity");
+}
+
+/// A no-op hook (non-mutating tool) must not rewrite the store — provenance and the
+/// freshness timestamp of a prior capture stay intact.
+#[test]
+fn carryover_noop_hook_preserves_provenance_and_freshness() {
+    let home = tmp("cvhome7");
+    let root = project_root();
+    let (rp, hp) = (root.to_str().unwrap(), home.to_str().unwrap());
+    let env = &[("KEEL_HOME", hp), ("KEEL_ROOT", rp)];
+
+    // Claude batch-captures → by=claude
+    let tdir = tmp("tx2");
+    let tpath = tdir.join("t.jsonl");
+    fs::write(
+        &tpath,
+        r#"{"type":"user","gitBranch":"main","cwd":"/r","message":{"role":"user","content":"do it"}}"#,
+    )
+    .unwrap();
+    run(
+        &["carryover-hook", "claude", "SessionEnd"],
+        &format!(
+            r#"{{"cwd":"{rp}","transcript_path":"{}"}}"#,
+            tpath.to_str().unwrap()
+        ),
+        env,
+    );
+    let before = read_snapshot(&home);
+    assert_eq!(before["by"], "claude");
+
+    // a Codex non-mutating PreToolUse (shell read) captures nothing → must NOT persist
+    run(
+        &["carryover-hook", "codex", "PreToolUse"],
+        &format!(r#"{{"cwd":"{rp}","tool_name":"shell","tool_input":{{"command":"ls"}}}}"#),
+        env,
+    );
+    let after = read_snapshot(&home);
+    assert_eq!(after["by"], "claude", "provenance clobbered by no-op hook");
+    assert_eq!(
+        after["updated"], before["updated"],
+        "freshness bumped by no-op hook"
     );
 }
