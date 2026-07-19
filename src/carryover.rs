@@ -472,10 +472,7 @@ fn persist(snap: &Snapshot, dir: &std::path::Path) {
 /// agent treats stale claims with suspicion. Best-effort — absence of a note is not a promise.
 fn drift_note(snap: &Snapshot, cwd: Option<&str>) -> Option<String> {
     let mut notes = Vec::new();
-    if let (Some(was), Some(now)) = (
-        snap.branch.as_deref(),
-        git_branch(&runtime::find_root(cwd)).as_deref(),
-    ) {
+    if let (Some(was), Some(now)) = (snap.branch.as_deref(), git_branch(cwd).as_deref()) {
         if was != now {
             notes.push(format!(
                 "branch changed since capture: was `{was}`, now `{now}`"
@@ -504,12 +501,34 @@ fn drift_note(snap: &Snapshot, cwd: Option<&str>) -> Option<String> {
 }
 
 /// Best-effort current branch (regular checkout; a worktree `.git` *file* → None).
-fn git_branch(root: &str) -> Option<String> {
-    let head =
-        std::fs::read_to_string(std::path::Path::new(root).join(".git").join("HEAD")).ok()?;
-    head.trim()
-        .strip_prefix("ref: refs/heads/")
-        .map(String::from)
+/// The branch of the working dir's *own* checkout — worktree-aware. A worktree's `.git` is a
+/// FILE (`gitdir: …/.git/worktrees/<name>`) whose HEAD is the worktree's branch, not the main
+/// repo's. Walk up from `cwd` to the nearest `.git` and read the right HEAD. (Resolving via
+/// `find_root` and reading the main `.git/HEAD` reported the wrong branch inside a worktree.)
+fn git_branch(cwd: Option<&str>) -> Option<String> {
+    let mut cur = match cwd {
+        Some(c) => std::path::PathBuf::from(c),
+        None => std::env::current_dir().ok()?,
+    };
+    loop {
+        let dotgit = cur.join(".git");
+        if dotgit.is_dir() {
+            return head_ref(&dotgit.join("HEAD"));
+        }
+        if dotgit.is_file() {
+            let content = std::fs::read_to_string(&dotgit).ok()?;
+            let gitdir = content.trim().strip_prefix("gitdir: ")?;
+            return head_ref(&std::path::Path::new(gitdir).join("HEAD"));
+        }
+        if !cur.pop() {
+            return None;
+        }
+    }
+}
+
+fn head_ref(head_path: &std::path::Path) -> Option<String> {
+    let h = std::fs::read_to_string(head_path).ok()?;
+    h.trim().strip_prefix("ref: refs/heads/").map(String::from)
 }
 
 /// Normalized field access across vendors — Codex uses `cwd`/`tool_name`/`tool_input`;
@@ -670,7 +689,7 @@ pub fn run_hook(platform: &str, stage: &str) -> i32 {
         snap.root_hash = root_hash(&event.root);
     }
     if snap.branch.is_none() {
-        snap.branch = git_branch(&event.root);
+        snap.branch = git_branch(event.cwd.as_deref());
     }
 
     // Only persist when something was actually captured — a no-op hook (Read, missing field,
@@ -873,6 +892,32 @@ mod tests {
         let (goal, result) = capture_antigravity(recs);
         assert_eq!(goal, vec!["add a rate limiter"]);
         assert_eq!(result.as_deref(), Some("Added a token bucket."));
+    }
+
+    // A git worktree reports ITS OWN branch, not the main checkout's (the live-observed bug).
+    #[test]
+    fn git_branch_reads_worktree_head_not_main() {
+        use std::fs;
+        let base = std::env::temp_dir().join(format!("keel-wt-{}", std::process::id()));
+        let (main, wt) = (base.join("main"), base.join("wt"));
+        fs::create_dir_all(main.join(".git/worktrees/wt")).unwrap();
+        fs::create_dir_all(&wt).unwrap();
+        fs::write(main.join(".git/HEAD"), "ref: refs/heads/develop\n").unwrap();
+        fs::write(
+            main.join(".git/worktrees/wt/HEAD"),
+            "ref: refs/heads/feature-x\n",
+        )
+        .unwrap();
+        fs::write(
+            wt.join(".git"),
+            format!("gitdir: {}", main.join(".git/worktrees/wt").display()),
+        )
+        .unwrap();
+
+        // plain repo → its own HEAD; worktree → the WORKTREE's branch, not main's
+        assert_eq!(git_branch(main.to_str()).as_deref(), Some("develop"));
+        assert_eq!(git_branch(wt.to_str()).as_deref(), Some("feature-x"));
+        fs::remove_dir_all(&base).ok();
     }
 
     // Injection envelope is platform-specific: nested for claude/codex, top-level for agy.
