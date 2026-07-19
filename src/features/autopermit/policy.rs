@@ -71,6 +71,45 @@ pub fn is_sensitive(file_path: Option<&str>, patterns: &[Regex]) -> bool {
     }
 }
 
+/// A concrete filename a sensitive glob would match (`id_rsa*` → `id_rsa`, `*.pem` → `.pem`).
+/// Lets us test whether a *glob operand* could expand onto a sensitive file.
+pub fn glob_witness(glob: &str) -> String {
+    let mut out = String::new();
+    let mut chars = glob.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '*' => {} // zero characters
+            '?' => out.push('a'),
+            '[' => {
+                for n in chars.by_ref() {
+                    if n == ']' {
+                        break;
+                    }
+                }
+                out.push('a');
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Like [`is_sensitive`], but a glob operand counts as sensitive when it *could* expand onto a
+/// sensitive file. The shell expands `cat ~/.ssh/id_*` / `cat .en?` at runtime; matching the
+/// literal glob against the patterns would miss it. Ordinary globs (`cat *.log`) don't overlap
+/// any sensitive witness, so they stay allowed — no added prompt fatigue.
+pub fn is_sensitive_operand(operand: &str, patterns: &[Regex], witnesses: &[String]) -> bool {
+    if is_sensitive(Some(operand), patterns) {
+        return true;
+    }
+    let b = basename(operand);
+    if b.contains(['*', '?', '[']) {
+        let re = glob_to_regex(b);
+        return witnesses.iter().any(|w| re.is_match(w));
+    }
+    false
+}
+
 pub fn is_inside(abs: &str, root: &str) -> bool {
     if abs.is_empty() || root.is_empty() {
         return false;

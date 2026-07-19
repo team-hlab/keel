@@ -6,7 +6,9 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use crate::features::autopermit::policy::{is_inside, is_sensitive, is_write_allowed};
+use crate::features::autopermit::policy::{
+    is_inside, is_sensitive, is_sensitive_operand, is_write_allowed,
+};
 use crate::model::Decision;
 
 fn rx(p: &str) -> Regex {
@@ -53,12 +55,15 @@ static PATTERN_READ: LazyLock<Regex> = LazyLock::new(|| rx(r"^(grep|egrep|fgrep|
 // gated on the wrapped command, not waved through. `command` is a POSIX alias-bypass primitive.
 static WRAPPER: LazyLock<Regex> = LazyLock::new(|| {
     rx(
-        r"^(command|env|nohup|time|unbuffer|stdbuf\s+-\S+|ionice(\s+-\S+)*|nice(\s+-n\s+\d+|\s+-\d+)?|timeout(\s+-\S+)*\s+[\d.]+[smhd]?)\s+",
+        r"^(command|builtin|exec|env|nohup|time|unbuffer|stdbuf\s+-\S+|ionice(\s+-\S+)*|nice(\s+-n\s+\d+|\s+-\d+)?|timeout(\s+-\S+)*\s+[\d.]+[smhd]?)\s+",
     )
 });
 // A `find` action that runs a sub-command (which can dump file contents) — SAFE would
 // otherwise allow it; we scan its tokens for sensitive targets instead.
 static FIND_EXEC: LazyLock<Regex> = LazyLock::new(|| rx(r"^find\b.*\s-(exec|execdir|ok)\b"));
+// A shell invoked with `-c <script>`: the script is re-parsed and run, so we recurse into it
+// (depth-bounded) rather than defer — `bash -c 'cat .env'` should gate like `cat .env`.
+static SHELL_C: LazyLock<Regex> = LazyLock::new(|| rx(r"^(sh|bash|zsh|dash|ash|ksh)\s.*-c(\s|$)"));
 // Input redirect `< file` (not `<<` heredoc, `<&` fd-dup, or `<(` process-sub). The file's
 // contents flow into the command's stdin, so a sensitive target is a read to gate.
 static INPUT_REDIR: LazyLock<Regex> =
@@ -295,6 +300,11 @@ fn read_operands(s: &str, skip_pattern: bool) -> Vec<String> {
             continue;
         }
         if tok.contains('<') || tok.contains('>') {
+            // a filename glued to a redirect (`.env>x`) is still read — keep the left side
+            let left: String = tok.chars().take_while(|c| *c != '<' && *c != '>').collect();
+            if !left.is_empty() && !left.chars().all(|c| c.is_ascii_digit()) {
+                operands.push(left);
+            }
             // a bare redirect operator (`>`, `2>`, `>>`, `<`) consumes the next token as its
             // target; an attached one (`2>/dev/null`) carries its own — either way, not an operand
             let bare = tok.trim_start_matches(|c: char| c.is_ascii_digit());
@@ -361,9 +371,11 @@ fn classify_segment(
     base: &str,
     root: &str,
     patterns: &[Regex],
+    witnesses: &[String],
     regexes: &[Regex],
     resolve: &dyn Fn(&str, &str) -> String,
     protected: Decision,
+    depth: u8,
 ) -> Decision {
     // DENY is enforced on the whole command in decide_bash, so it can't reach here.
     if has_expansion(seg) {
@@ -386,12 +398,35 @@ fn classify_segment(
     }
     // `< secret` feeds a file's contents into any command → gate it as a read.
     for t in input_redir_targets(seg) {
-        if is_sensitive(Some(&t), patterns) {
+        if is_sensitive_operand(&t, patterns, witnesses) {
             worst = worsen(worst, Decision::Ask);
         }
     }
 
     let s = strip_prefixes(seg);
+    // `sh -c '<script>'` re-parses and runs the script → recurse into it (depth-bounded) so it's
+    // gated, not deferred. `$`/backtick scripts already bailed to Pass via has_expansion above.
+    if depth < 3 && SHELL_C.is_match(&s) {
+        let toks = tokenize(&s);
+        if let Some(script) = toks
+            .iter()
+            .position(|t| t == "-c")
+            .and_then(|i| toks.get(i + 1))
+        {
+            let inner = decide_bash_at(
+                Some(script),
+                Some(base),
+                root,
+                patterns,
+                witnesses,
+                regexes,
+                resolve,
+                protected,
+                depth + 1,
+            );
+            return worsen(worst, inner);
+        }
+    }
     if FILE_WRITE.is_match(&s) {
         let v = match last_path_arg(&s) {
             Some(t) => classify_write(&t, &exec_dir, root, patterns, regexes, resolve, protected),
@@ -404,7 +439,7 @@ fn classify_segment(
     if READ_CMDS.is_match(&s) && !SED_INPLACE.is_match(&s) {
         let sensitive = read_operands(&s, PATTERN_READ.is_match(&s))
             .iter()
-            .any(|t| is_sensitive(Some(t), patterns));
+            .any(|t| is_sensitive_operand(t, patterns, witnesses));
         let v = if sensitive {
             Decision::Ask
         } else {
@@ -413,7 +448,11 @@ fn classify_segment(
         return worsen(worst, v);
     }
     // `find … -exec/-ok <cmd>` runs a sub-command that can dump contents; SAFE would allow it.
-    if FIND_EXEC.is_match(&s) && tokenize(&s).iter().any(|t| is_sensitive(Some(t), patterns)) {
+    if FIND_EXEC.is_match(&s)
+        && tokenize(&s)
+            .iter()
+            .any(|t| is_sensitive_operand(t, patterns, witnesses))
+    {
         return worsen(worst, Decision::Ask);
     }
     let safe = SAFE.iter().any(|r| r.is_match(&s)) && !SED_INPLACE.is_match(&s);
@@ -438,9 +477,28 @@ pub fn decide_bash(
     cwd: Option<&str>,
     root: &str,
     patterns: &[Regex],
+    witnesses: &[String],
     regexes: &[Regex],
     resolve: &dyn Fn(&str, &str) -> String,
     protected: Decision,
+) -> Decision {
+    decide_bash_at(
+        command, cwd, root, patterns, witnesses, regexes, resolve, protected, 0,
+    )
+}
+
+// `depth` bounds `sh -c`/`bash -c` recursion (see classify_segment).
+#[allow(clippy::too_many_arguments)]
+fn decide_bash_at(
+    command: Option<&str>,
+    cwd: Option<&str>,
+    root: &str,
+    patterns: &[Regex],
+    witnesses: &[String],
+    regexes: &[Regex],
+    resolve: &dyn Fn(&str, &str) -> String,
+    protected: Decision,
+    depth: u8,
 ) -> Decision {
     let command = match command {
         Some(c) => c,
@@ -472,7 +530,9 @@ pub fn decide_bash(
     for seg in split_segments(&inner) {
         worst = worsen(
             worst,
-            classify_segment(&seg, &base, root, patterns, regexes, resolve, protected),
+            classify_segment(
+                &seg, &base, root, patterns, witnesses, regexes, resolve, protected, depth,
+            ),
         );
         if matches!(worst, Decision::Deny) {
             break;
@@ -487,6 +547,13 @@ mod tests {
     use crate::features::autopermit::policy::write_allow_regexes;
 
     const ROOT: &str = "/repo";
+
+    fn wits() -> Vec<String> {
+        crate::features::autopermit::policy::DEFAULT_SENSITIVE
+            .iter()
+            .map(|g| crate::features::autopermit::policy::glob_witness(g))
+            .collect()
+    }
 
     fn pats() -> Vec<Regex> {
         crate::features::autopermit::policy::DEFAULT_SENSITIVE
@@ -520,8 +587,9 @@ mod tests {
     }
     fn d_p(cmd: &str, cwd: &str, protected: Decision) -> Decision {
         let p = pats();
+        let w = wits();
         let r = write_allow_regexes("worktrees", "projects");
-        decide_bash(Some(cmd), Some(cwd), ROOT, &p, &r, &normpath, protected)
+        decide_bash(Some(cmd), Some(cwd), ROOT, &p, &w, &r, &normpath, protected)
     }
 
     #[test]
@@ -559,8 +627,10 @@ mod tests {
             "mkfs.ext4 /dev/sda",
             "gh pr merge 3",
             "gh issue close 4",
-            "ls && rm -rf /",   // deny anywhere in a chain
-            "true || rm -rf ~", // ...including the || branch
+            "ls && rm -rf /",     // deny anywhere in a chain
+            "true || rm -rf ~",   // ...including the || branch
+            "nohup rm -rf /",     // deny survives a wrapper prefix
+            "bash -c 'rm -rf /'", // ...and shell -c recursion
         ] {
             assert_eq!(d(c, ROOT), Decision::Deny, "{c}");
         }
@@ -646,6 +716,17 @@ mod tests {
             "< .env cat",                       // leading input redirect
             "find . -name .env -exec cat {} +", // find -exec dumper
             "find /h -name id_rsa -execdir base64 {} +",
+            // glob operands that expand onto secrets (shell expands; literal-match would miss):
+            "cat ~/.ssh/id_*",
+            "cat .en?",
+            "base64 ~/.ssh/id_ed*",
+            "cat *.pem",
+            "cat .env>x",    // filename glued to a redirect, still a read
+            "exec cat .env", // exec wrapper
+            "builtin cat .env",
+            "sh -c 'cat .env'", // shell -c recursion
+            "bash -c \"base64 id_rsa\"",
+            "timeout 5 bash -c 'cat .env'", // wrapper + recursion
         ] {
             assert_eq!(d(c, ROOT), Decision::Ask, "{c}");
         }
@@ -672,6 +753,10 @@ mod tests {
             "timeout 5 cat README.md",
             "grep -E '(foo|bar)' README.md", // quoted-paren pattern, ordinary file
             "find . -name '*.rs' -exec grep TODO {} +",
+            // ordinary globs that don't overlap any secret → still allowed (no fatigue)
+            "cat *.log",
+            "head src/*.rs",
+            "cat build/*.txt",
         ] {
             assert_eq!(d(c, ROOT), Decision::Allow, "{c}");
         }
@@ -714,9 +799,10 @@ mod tests {
         assert_eq!(d("   ", ROOT), Decision::Pass); // whitespace only
         assert_eq!(d("# comment", ROOT), Decision::Pass); // comment only
         let p = pats();
+        let w = wits();
         let r = write_allow_regexes("worktrees", "projects");
         assert_eq!(
-            decide_bash(None, Some(ROOT), ROOT, &p, &r, &normpath, Decision::Ask),
+            decide_bash(None, Some(ROOT), ROOT, &p, &w, &r, &normpath, Decision::Ask),
             Decision::Pass
         );
     }

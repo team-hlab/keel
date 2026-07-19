@@ -16,9 +16,15 @@ the version — see [docs/RELEASING.md](docs/RELEASING.md).
   allow. The check is quote-aware and resists the obvious dodges: multiple operands
   (`cat a .env`), trailing redirects (`cat .env 2>/dev/null`), input redirects
   (`cat <.env`, `< .env cat`), quoted-paren patterns (`grep -E '(A|B)' .env`), transparent
-  wrappers (`command`/`env`/`nohup`/`timeout`/`nice cat .env`), and `find … -exec` dumpers.
+  wrappers (`command`/`builtin`/`exec`/`env`/`nohup`/`timeout`/`nice cat .env`), glob operands
+  that expand onto secrets (`cat ~/.ssh/id_*`, `cat .en?` — ordinary globs like `cat *.log`
+  stay allow, no fatigue), filenames glued to a redirect (`cat .env>x`), `find … -exec`
+  dumpers, and `sh -c`/`bash -c '<script>'` (recursed into, depth-bounded — so
+  `bash -c 'rm -rf /'` still denies even though the quote hid it from the top-level scan).
   This makes secret-read gating uniform across all three agents (Claude, Codex — which reads
-  *only* via the shell — and Antigravity).
+  *only* via the shell — and Antigravity). Known residual gaps (defer to the agent's own
+  gate as `pass`, never silent `allow`): runtime `$VAR`/`$(…)` expansion and indirection
+  through `eval`/`xargs` — static shell analysis can't resolve these without executing.
 - **Expanded the default sensitive-file set** beyond `.env`/`*.key`/`*.pem`/`credentials*`/
   `*secret*` to cover SSH/PGP keys (`id_rsa*`, `id_ed25519*`, `id_ecdsa*`, `id_dsa*`,
   `*.ppk`), keystores/vaults (`*.p12`, `*.pfx`, `*.keystore`, `*.jks`, `*.kdbx`), and
