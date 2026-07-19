@@ -270,6 +270,41 @@ fn codex_and_antigravity_render() {
 }
 
 #[test]
+fn shell_secret_read_asks_on_codex_and_antigravity() {
+    // `cat .env` → ask must actually REACH the user on every agent, not just Claude.
+    let root = project_root();
+    let r = root.to_str().unwrap();
+    let cmd = payload("Bash", "command", "cat .env", r);
+
+    // Codex: ask is deferred at PreToolUse ({}), then surfaced at PermissionRequest —
+    // Codex reads ONLY via the shell, so this is the sole read gate for it.
+    let pre = run(&["run", "codex", "PreToolUse"], &cmd, &[("KEEL_ROOT", r)]);
+    assert_eq!(pre.stdout.trim(), "{}");
+    let pr = run(
+        &["run", "codex", "PermissionRequest"],
+        &cmd,
+        &[("KEEL_ROOT", r)],
+    );
+    let v: Value = serde_json::from_str(pr.stdout.trim()).unwrap();
+    assert_eq!(v["hookSpecificOutput"]["decision"]["behavior"], "ask");
+
+    // Antigravity: run_command → Bash → ask at PreToolUse
+    let ag = serde_json::json!({
+        "toolCall": { "name": "run_command", "args": { "CommandLine": "cat .env" } },
+        "workspacePaths": [r]
+    })
+    .to_string();
+    let o = run(
+        &["run", "antigravity", "PreToolUse"],
+        &ag,
+        &[("KEEL_ROOT", r)],
+    );
+    let v: Value = serde_json::from_str(o.stdout.trim()).unwrap();
+    assert_eq!(v["decision"], "ask");
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
 fn write_tools_gated_on_codex_and_antigravity() {
     let root = project_root();
     let r = root.to_str().unwrap();

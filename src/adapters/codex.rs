@@ -75,15 +75,19 @@ fn patch_paths(patch: &str) -> Vec<String> {
 pub fn render(verdict: &Verdict, stage: &str) -> String {
     let d = verdict.decision;
     if stage == "PermissionRequest" {
+        // This is where a deferred `ask` (from PreToolUse) must surface — Codex mediates the
+        // actual confirmation here. Emit allow/deny/ask; only `Pass` (no opinion) stays `{}`.
+        // Dropping `Ask` here would silently let a secret read through — and shell is Codex's
+        // *only* read path, so this is the gate. (behavior token is best-effort per the schema.)
         return match d {
-            Decision::Allow | Decision::Deny => json!({
+            Decision::Pass => json!({}).to_string(),
+            _ => json!({
                 "hookSpecificOutput": {
                     "hookEventName": "PermissionRequest",
                     "decision": { "behavior": d.as_str(), "reason": verdict.reason }
                 }
             })
             .to_string(),
-            _ => json!({}).to_string(),
         };
     }
     match d {

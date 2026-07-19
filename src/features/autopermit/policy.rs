@@ -103,7 +103,10 @@ pub fn is_sensitive_operand(operand: &str, patterns: &[Regex], witnesses: &[Stri
         return true;
     }
     let b = basename(operand);
-    if b.contains(['*', '?', '[']) {
+    // A glob with at least one literal char could target a specific secret family (`id_*`,
+    // `.en?`). A bare `*`/`?` matches everything — treating it as sensitive would ask on every
+    // `cat *`, so require a literal anchor before consulting the witnesses.
+    if b.contains(['*', '?', '[']) && b.chars().any(|c| !matches!(c, '*' | '?' | '[' | ']')) {
         let re = glob_to_regex(b);
         return witnesses.iter().any(|w| re.is_match(w));
     }

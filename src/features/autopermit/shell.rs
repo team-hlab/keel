@@ -33,7 +33,7 @@ static OUTER_SUBSHELL: LazyLock<Regex> =
     LazyLock::new(|| rx(r"(?s)^\((.*)\)\s*(?:\d*>&\d+\s*|\|\|\s*(?:true|:)\s*)*$"));
 static FD_REDIR: LazyLock<Regex> = LazyLock::new(|| rx(r"\d*>&\d+"));
 static DEVNULL: LazyLock<Regex> = LazyLock::new(|| rx(r"\d*>\s*/dev/null"));
-static REDIR: LazyLock<Regex> = LazyLock::new(|| rx(r">{1,2}\s*([^\s;|&]+)"));
+static REDIR: LazyLock<Regex> = LazyLock::new(|| rx(r">{1,2}\|?\s*([^\s;|&]+)"));
 static TEE: LazyLock<Regex> = LazyLock::new(|| rx(r"\|\s*tee\s+(?:-a\s+)?([^\s;|&]+)"));
 static SED_INPLACE: LazyLock<Regex> = LazyLock::new(|| rx(r"^sed\s+-i"));
 // Content-dumping reads. These print a file's bytes (the exfil path an agent falls back to
@@ -63,11 +63,13 @@ static WRAPPER: LazyLock<Regex> = LazyLock::new(|| {
 static FIND_EXEC: LazyLock<Regex> = LazyLock::new(|| rx(r"^find\b.*\s-(exec|execdir|ok)\b"));
 // A shell invoked with `-c <script>`: the script is re-parsed and run, so we recurse into it
 // (depth-bounded) rather than defer — `bash -c 'cat .env'` should gate like `cat .env`.
-static SHELL_C: LazyLock<Regex> = LazyLock::new(|| rx(r"^(sh|bash|zsh|dash|ash|ksh)\s.*-c(\s|$)"));
-// Input redirect `< file` (not `<<` heredoc, `<&` fd-dup, or `<(` process-sub). The file's
-// contents flow into the command's stdin, so a sensitive target is a read to gate.
+static SHELL_C: LazyLock<Regex> =
+    LazyLock::new(|| rx(r"^(sh|bash|zsh|dash|ash|ksh)\s+(?:\S+\s+)*-c(\s|$)"));
+// Input redirect `< file` / `N< file` (fd-numbered), but not `<<` heredoc, `<&` fd-dup, or
+// `<(` process-sub. The file's contents flow into the command's stdin → a read to gate. The
+// target char-class starting with a path char is what excludes `<<`/`<&`/`<(`.
 static INPUT_REDIR: LazyLock<Regex> =
-    LazyLock::new(|| rx(r"(?:^|[^<&0-9])<\s*([A-Za-z0-9_./~][^\s;|&<>]*)"));
+    LazyLock::new(|| rx(r"(?:^|[^<])\d*<\s*([A-Za-z0-9_./~*?\[][^\s;|&<>]*)"));
 
 static SAFE: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     vec![
@@ -220,8 +222,35 @@ fn seg_exec_dir(seg: &str, base: &str, resolve: &dyn Fn(&str, &str) -> String) -
     }
 }
 
+/// Blank out single/double-quoted regions (content + quotes → spaces). A real redirect operator
+/// is never inside quotes, so masking before scanning kills false positives like `grep '=>' f`
+/// or `grep '<x>' f` being read as writes/reads — without missing any real redirect.
+fn mask_quoted(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut q: Option<char> = None;
+    for c in s.chars() {
+        match q {
+            Some(qc) => {
+                if c == qc {
+                    q = None;
+                }
+                out.push(' ');
+            }
+            None => match c {
+                '\'' | '"' => {
+                    q = Some(c);
+                    out.push(' ');
+                }
+                _ => out.push(c),
+            },
+        }
+    }
+    out
+}
+
 fn redirect_targets(seg: &str) -> Vec<String> {
-    let clean = FD_REDIR.replace_all(seg, " ");
+    let masked = mask_quoted(seg);
+    let clean = FD_REDIR.replace_all(&masked, " ");
     let clean = DEVNULL.replace_all(&clean, " ");
     let mut out = Vec::new();
     for c in REDIR.captures_iter(&clean) {
@@ -249,33 +278,68 @@ fn tokenize(s: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut buf = String::new();
     let mut has = false;
-    let mut q: Option<char> = None;
-    for ch in s.chars() {
-        match q {
-            Some(qc) => {
-                if ch == qc {
-                    q = None;
-                } else {
-                    buf.push(ch);
-                }
-                has = true;
-            }
-            None => match ch {
-                '\'' | '"' => {
-                    q = Some(ch);
+    let mut chars = s.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            // backslash escape: bash unescapes `\.` → `.`, so `cat \.env` reads `.env`
+            '\\' => {
+                if let Some(n) = chars.next() {
+                    buf.push(n);
                     has = true;
                 }
-                c if c.is_whitespace() => {
-                    if has {
-                        out.push(std::mem::take(&mut buf));
-                        has = false;
+            }
+            '\'' => {
+                has = true;
+                for c in chars.by_ref() {
+                    if c == '\'' {
+                        break;
+                    }
+                    buf.push(c);
+                }
+            }
+            '"' => {
+                has = true;
+                while let Some(c) = chars.next() {
+                    if c == '"' {
+                        break;
+                    }
+                    if c == '\\' {
+                        if let Some(n) = chars.next() {
+                            buf.push(n);
+                        }
+                    } else {
+                        buf.push(c);
                     }
                 }
-                c => {
-                    buf.push(c);
-                    has = true;
+            }
+            // ANSI-C quoting `$'...'` — bash decodes `\056`→`.`, so `cat $'\056env'` reads `.env`
+            '$' if chars.peek() == Some(&'\'') => {
+                chars.next();
+                has = true;
+                let mut raw = String::new();
+                while let Some(c) = chars.next() {
+                    if c == '\'' {
+                        break;
+                    }
+                    raw.push(c);
+                    if c == '\\' {
+                        if let Some(n) = chars.next() {
+                            raw.push(n);
+                        }
+                    }
                 }
-            },
+                buf.push_str(&decode_ansi_c(&raw));
+            }
+            c if c.is_whitespace() => {
+                if has {
+                    out.push(std::mem::take(&mut buf));
+                    has = false;
+                }
+            }
+            c => {
+                buf.push(c);
+                has = true;
+            }
         }
     }
     if has {
@@ -284,17 +348,157 @@ fn tokenize(s: &str) -> Vec<String> {
     out
 }
 
-/// File operands a read command actually opens: all non-flag tokens after the command,
-/// excluding redirect operators and their target tokens (handled separately). For
-/// pattern-first readers the leading pattern/script operand is dropped.
+/// Decode `$'...'` ANSI-C escapes we care about (octal/hex/`\n` etc.); unknown escapes pass the
+/// escaped char through. Only used to unmask an obfuscated filename, so byte→char is fine.
+fn decode_ansi_c(s: &str) -> String {
+    let mut out = String::new();
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('t') => out.push('\t'),
+            Some('r') => out.push('\r'),
+            Some('x') => {
+                let mut h = String::new();
+                while h.len() < 2 {
+                    match chars.peek() {
+                        Some(d) if d.is_ascii_hexdigit() => {
+                            h.push(*d);
+                            chars.next();
+                        }
+                        _ => break,
+                    }
+                }
+                if let Ok(n) = u8::from_str_radix(&h, 16) {
+                    out.push(n as char);
+                }
+            }
+            Some(d) if d.is_digit(8) => {
+                let mut o = d.to_string();
+                while o.len() < 3 {
+                    match chars.peek() {
+                        Some(x) if x.is_digit(8) => {
+                            o.push(*x);
+                            chars.next();
+                        }
+                        _ => break,
+                    }
+                }
+                if let Ok(n) = u8::from_str_radix(&o, 8) {
+                    out.push(n as char);
+                }
+            }
+            Some(other) => out.push(other),
+            None => {}
+        }
+    }
+    out
+}
+
+/// Expand one level of `{a,b,c}` comma-lists so `cat {.env,x}` yields `.env` as a candidate.
+/// Bounded; ranges (`{1..9}`) and nesting aren't handled (they fall through as-is).
+fn brace_expand(s: &str) -> Vec<String> {
+    if let Some(open) = s.find('{') {
+        let rest = &s[open + 1..];
+        if let Some(rel) = rest.find('}') {
+            let inner = &rest[..rel];
+            if inner.contains(',') && !inner.contains('{') {
+                let prefix = &s[..open];
+                let suffix = &rest[rel + 1..];
+                let mut out = Vec::new();
+                for part in inner.split(',') {
+                    for full in brace_expand(&format!("{prefix}{part}{suffix}")) {
+                        out.push(full);
+                        if out.len() >= 64 {
+                            return out;
+                        }
+                    }
+                }
+                return out;
+            }
+        }
+    }
+    vec![s.to_string()]
+}
+
+/// Remove backslash escapes outside single quotes (`r\m` → `rm`) so the DENY scan can't be
+/// dodged by escaping a letter of a catastrophic command.
+fn unescape_outside_squotes(s: &str) -> String {
+    let mut out = String::new();
+    let mut chars = s.chars();
+    let mut in_sq = false;
+    while let Some(c) = chars.next() {
+        if in_sq {
+            out.push(c);
+            if c == '\'' {
+                in_sq = false;
+            }
+        } else if c == '\'' {
+            out.push(c);
+            in_sq = true;
+        } else if c == '\\' {
+            if let Some(n) = chars.next() {
+                out.push(n);
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// File operands a read command actually opens: all non-flag tokens after the command
+/// (brace-expanded), excluding redirect operators and their target tokens. For pattern-first
+/// readers (grep/awk/sed) the leading pattern/script operand is dropped — unless the pattern
+/// came from a `-e`/`-f` flag, in which case a `-f FILE` value is itself a read target.
 fn read_operands(s: &str, skip_pattern: bool) -> Vec<String> {
     let toks = tokenize(s);
-    let mut operands = Vec::new();
+    let mut operands: Vec<String> = Vec::new();
     let mut skip_next = false;
+    let mut consume: Option<bool> = None; // grep/awk/sed flag value: Some(true)=file, Some(false)=pattern
+    let mut pattern_from_flag = false;
+    let push = |operands: &mut Vec<String>, t: &str| operands.extend(brace_expand(t));
     for tok in toks.iter().skip(1) {
+        if let Some(is_file) = consume.take() {
+            if is_file {
+                push(&mut operands, tok); // `-f FILE`: grep/awk/sed read this file
+            }
+            continue; // `-e PATTERN`: consumed, not a file
+        }
         if skip_next {
             skip_next = false;
             continue;
+        }
+        // grep/awk/sed pattern/file flags — scoped to pattern-readers so `tail -f` is unaffected
+        if skip_pattern {
+            match tok.as_str() {
+                "-f" | "--file" => {
+                    consume = Some(true);
+                    pattern_from_flag = true;
+                    continue;
+                }
+                "-e" | "--regexp" | "--regex" => {
+                    consume = Some(false);
+                    pattern_from_flag = true;
+                    continue;
+                }
+                _ => {}
+            }
+            if let Some(f) = tok.strip_prefix("-f") {
+                if !f.is_empty() {
+                    push(&mut operands, f); // glued `-fFILE`
+                    pattern_from_flag = true;
+                    continue;
+                }
+            }
+            if tok.starts_with("-e") && tok.len() > 2 {
+                pattern_from_flag = true; // glued `-ePATTERN`
+                continue;
+            }
         }
         if tok.starts_with('-') || tok == "&" || tok == "|" || tok == ";" {
             continue;
@@ -303,7 +507,7 @@ fn read_operands(s: &str, skip_pattern: bool) -> Vec<String> {
             // a filename glued to a redirect (`.env>x`) is still read — keep the left side
             let left: String = tok.chars().take_while(|c| *c != '<' && *c != '>').collect();
             if !left.is_empty() && !left.chars().all(|c| c.is_ascii_digit()) {
-                operands.push(left);
+                push(&mut operands, &left);
             }
             // a bare redirect operator (`>`, `2>`, `>>`, `<`) consumes the next token as its
             // target; an attached one (`2>/dev/null`) carries its own — either way, not an operand
@@ -313,19 +517,20 @@ fn read_operands(s: &str, skip_pattern: bool) -> Vec<String> {
             }
             continue;
         }
-        operands.push(tok.clone());
+        push(&mut operands, tok);
     }
-    if skip_pattern && !operands.is_empty() {
+    if skip_pattern && !pattern_from_flag && !operands.is_empty() {
         operands.remove(0);
     }
     operands
 }
 
-/// `< file` input-redirect targets (contents flow into the command as a read).
+/// `< file` input-redirect targets (contents flow into the command as a read), brace-expanded.
 fn input_redir_targets(seg: &str) -> Vec<String> {
+    let masked = mask_quoted(seg);
     INPUT_REDIR
-        .captures_iter(seg)
-        .map(|c| c[1].trim_matches(['"', '\'']).to_string())
+        .captures_iter(&masked)
+        .flat_map(|c| brace_expand(c[1].trim_matches(['"', '\''])))
         .collect()
 }
 
@@ -382,8 +587,9 @@ fn classify_segment(
         return Decision::Pass;
     }
     // Real subshells/command-subst are too complex to reason about → pass. Quoted parens
-    // (e.g. a `grep -E '(A|B)'` pattern) are not grouping, so strip quotes before this check.
-    let unquoted = SINGLE_QUOTED.replace_all(seg, " ");
+    // (a `grep -E '(A|B)'` pattern, an `awk` script, `if (x > 3)`) are not grouping, so mask
+    // quoted regions before this check — otherwise every such command needlessly defers.
+    let unquoted = mask_quoted(seg);
     if unquoted.contains('(') || unquoted.contains(')') {
         return Decision::Pass;
     }
@@ -406,26 +612,31 @@ fn classify_segment(
     let s = strip_prefixes(seg);
     // `sh -c '<script>'` re-parses and runs the script → recurse into it (depth-bounded) so it's
     // gated, not deferred. `$`/backtick scripts already bailed to Pass via has_expansion above.
-    if depth < 3 && SHELL_C.is_match(&s) {
-        let toks = tokenize(&s);
-        if let Some(script) = toks
-            .iter()
-            .position(|t| t == "-c")
-            .and_then(|i| toks.get(i + 1))
-        {
-            let inner = decide_bash_at(
-                Some(script),
-                Some(base),
-                root,
-                patterns,
-                witnesses,
-                regexes,
-                resolve,
-                protected,
-                depth + 1,
-            );
-            return worsen(worst, inner);
+    if SHELL_C.is_match(&s) {
+        if depth < 3 {
+            let toks = tokenize(&s);
+            if let Some(script) = toks
+                .iter()
+                .position(|t| t == "-c")
+                .and_then(|i| toks.get(i + 1))
+            {
+                let inner = decide_bash_at(
+                    Some(script),
+                    Some(base),
+                    root,
+                    patterns,
+                    witnesses,
+                    regexes,
+                    resolve,
+                    protected,
+                    depth + 1,
+                );
+                return worsen(worst, inner);
+            }
         }
+        // depth exhausted, or no `-c` script token → can't inspect the inner command → defer.
+        // Never fall through to the allow-ish branches with an un-inspected shell script.
+        return worsen(worst, Decision::Pass);
     }
     if FILE_WRITE.is_match(&s) {
         let v = match last_path_arg(&s) {
@@ -451,7 +662,8 @@ fn classify_segment(
     if FIND_EXEC.is_match(&s)
         && tokenize(&s)
             .iter()
-            .any(|t| is_sensitive_operand(t, patterns, witnesses))
+            .flat_map(|t| brace_expand(t))
+            .any(|t| is_sensitive_operand(&t, patterns, witnesses))
     {
         return worsen(worst, Decision::Ask);
     }
@@ -504,11 +716,22 @@ fn decide_bash_at(
         Some(c) => c,
         None => return Decision::Pass,
     };
+    // A real agent command is never hundreds of KB. Cap input so a pathological command
+    // (e.g. thousands of redirect targets, each hitting the filesystem via `resolve`) can't
+    // turn the hook into a latency sink — defer instead. Bounds every downstream loop at once.
+    if command.len() > 64 * 1024 {
+        return Decision::Pass;
+    }
     let cmd = strip_comments(command);
     if cmd.is_empty() {
         return Decision::Pass;
     }
-    if DENY.iter().any(|r| r.is_match(command)) {
+    // Scan DENY over normalized variants so escaping (`r\m -rf /`) or braces (`rm {-rf,} /`)
+    // can't hide a catastrophic command. (Quoted `/` in `rm -rf "/"` is a known residual gap.)
+    if brace_expand(&unescape_outside_squotes(command))
+        .iter()
+        .any(|v| DENY.iter().any(|r| r.is_match(v)))
+    {
         return Decision::Deny;
     }
 
@@ -631,9 +854,116 @@ mod tests {
             "true || rm -rf ~",   // ...including the || branch
             "nohup rm -rf /",     // deny survives a wrapper prefix
             "bash -c 'rm -rf /'", // ...and shell -c recursion
+            "r\\m -rf /",         // ...backslash-escaped command word (unescape before DENY)
+            "rm -r\\f /",
+            "rm {-rf,} /", // ...brace expansion
         ] {
             assert_eq!(d(c, ROOT), Decision::Deny, "{c}");
         }
+    }
+
+    #[test]
+    fn obfuscated_reads_ask() {
+        // reviewers' adversarial dodges — an agent that read the diff would try these first
+        for c in [
+            "cat \\.env", // backslash escape
+            "cat id_rs\\a",
+            "base64 ~/.ssh/id_r\\sa",
+            "cat $'\\056env'", // ANSI-C octal → ".env"
+            "cat {.env,x}",    // brace expansion
+            "cat README.md .{env,}",
+            "cat 0< .env", // fd-numbered input redirect
+            "cat 3< credentials.json",
+            "cat < *.pem",            // glob input redirect
+            "cat ~/.ssh/id_*",        // glob operand overlapping a secret family
+            "grep -f .env other.txt", // -f reads .env as a pattern file (not dropped as pattern)
+            "cat .env>/tmp/steal",    // glued redirect, exfil outside repo
+        ] {
+            assert_eq!(d(c, ROOT), Decision::Ask, "{c}");
+        }
+    }
+
+    #[test]
+    fn nested_sh_c_never_allows_secret() {
+        // recursion gates a nested secret read (2-deep, properly quoted)
+        assert_eq!(d("sh -c 'sh -c \"cat .env\"'", ROOT), Decision::Ask);
+        // a shell -c we can't extract a script from must defer, never fall through to Allow
+        assert_eq!(d("bash -c", ROOT), Decision::Pass);
+        assert_eq!(d("sh -ec", ROOT), Decision::Pass);
+    }
+
+    #[test]
+    fn no_fatigue_on_quoted_metachars() {
+        // quoted redirect/paren metacharacters are data, not operators → must not ask/pass-noise
+        for c in [
+            "grep -c '=>' handlers.js", // arrow function, quoted `>`
+            "grep -n 'if (x > 3)' src/main.rs",
+            "grep '<tag>' file.xml",
+            "awk '{if ($3 > 5) print}' data.txt",
+            "cat *",     // bare glob — matches everything, so not "a secret glob"
+            "cat src/*", // dir glob, no literal secret anchor
+            "grep -E '(A|B)' README.md",
+        ] {
+            assert_eq!(d(c, ROOT), Decision::Allow, "{c}");
+        }
+        // a quoted mention of a catastrophic command is not that command
+        assert_eq!(
+            d("git commit -m 'reset --hard the bug'", ROOT),
+            Decision::Pass
+        );
+    }
+
+    #[test]
+    fn big_input_defers() {
+        let huge = format!("echo x{}", " > f".repeat(30_000));
+        assert_eq!(d(&huge, ROOT), Decision::Pass); // capped, no per-target fs storm
+    }
+
+    #[test]
+    fn helper_tokenize() {
+        assert_eq!(tokenize("cat \\.env"), vec!["cat", ".env"]);
+        assert_eq!(tokenize("cat 'a b' c"), vec!["cat", "a b", "c"]);
+        assert_eq!(tokenize("a'b'c"), vec!["abc"]); // adjacent-quote concat
+        assert_eq!(tokenize("cat $'\\056env'"), vec!["cat", ".env"]);
+    }
+
+    #[test]
+    fn read_gating_precedes_safe_allow() {
+        // Invariant: any content-dumper listed in SAFE must ALSO be caught by the READ_CMDS
+        // branch (which runs first) — otherwise adding a reader to SAFE alone silently makes it
+        // an ungated secret-read bypass. Probe each SAFE reader with a secret operand.
+        for c in [
+            "cat .env",
+            "head .env",
+            "tail .env",
+            "grep x .env",
+            "sed -n 1p .env",
+            "awk '{print}' .env",
+            "cut -f1 .env",
+            "jq . .env",
+            "sort .env",
+            "uniq .env",
+            "diff a .env",
+        ] {
+            assert_eq!(d(c, ROOT), Decision::Ask, "SAFE reader must gate: {c}");
+        }
+        // metadata-only SAFE commands intentionally do NOT gate (no content revealed)
+        for c in ["ls .env", "stat .env", "wc -c .env", "file .env"] {
+            assert_ne!(
+                d(c, ROOT),
+                Decision::Ask,
+                "metadata-only must not gate: {c}"
+            );
+        }
+    }
+
+    #[test]
+    fn helper_brace_and_unescape() {
+        assert_eq!(brace_expand("{.env,x}"), vec![".env", "x"]);
+        assert_eq!(brace_expand(".{env,}"), vec![".env", "."]);
+        assert_eq!(brace_expand("plain"), vec!["plain"]);
+        assert_eq!(unescape_outside_squotes("r\\m -rf /"), "rm -rf /");
+        assert_eq!(unescape_outside_squotes("echo '\\x'"), "echo '\\x'"); // single-quoted kept
     }
 
     #[test]
