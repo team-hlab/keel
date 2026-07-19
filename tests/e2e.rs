@@ -739,6 +739,122 @@ fn carryover_antigravity_write_captured() {
     assert_eq!(snap["by"], "antigravity");
 }
 
+/// Antigravity Stop → batch-parse `transcript_full.jsonl` for goal + result.
+#[test]
+fn carryover_antigravity_transcript_captures() {
+    let home = tmp("cvhome8");
+    let root = project_root();
+    let (rp, hp) = (root.to_str().unwrap(), home.to_str().unwrap());
+    let env = &[("KEEL_HOME", hp), ("KEEL_ROOT", rp)];
+
+    // transcriptPath points at transcript.jsonl; the sibling _full is preferred.
+    let logs = tmp("logs");
+    fs::write(
+        logs.join("transcript_full.jsonl"),
+        "{\"source\":\"USER_EXPLICIT\",\"type\":\"USER_INPUT\",\"content\":\"wire antigravity\"}\n\
+         {\"source\":\"MODEL\",\"type\":\"PLANNER_RESPONSE\",\"content\":\"done wiring\"}",
+    )
+    .unwrap();
+    run(
+        &["carryover-hook", "antigravity", "Stop"],
+        &format!(
+            r#"{{"workspacePaths":["{rp}"],"transcriptPath":"{}"}}"#,
+            logs.join("transcript.jsonl").to_str().unwrap()
+        ),
+        env,
+    );
+    let snap = read_snapshot(&home);
+    assert_eq!(snap["goal"][0], "wire antigravity");
+    assert_eq!(snap["result"], "done wiring");
+    assert_eq!(snap["by"], "antigravity");
+}
+
+/// Antigravity injects on PreInvocation (no SessionStart), top-level `additionalContext`,
+/// at most once per conversation.
+#[test]
+fn carryover_antigravity_preinvocation_injects_once() {
+    let home = tmp("cvhome9");
+    let root = project_root();
+    let (rp, hp) = (root.to_str().unwrap(), home.to_str().unwrap());
+    let env = &[("KEEL_HOME", hp), ("KEEL_ROOT", rp)];
+
+    let logs = tmp("logs2");
+    fs::write(
+        logs.join("transcript_full.jsonl"),
+        "{\"source\":\"USER_EXPLICIT\",\"type\":\"USER_INPUT\",\"content\":\"resume me\"}",
+    )
+    .unwrap();
+    run(
+        &["carryover-hook", "antigravity", "Stop"],
+        &format!(
+            r#"{{"workspacePaths":["{rp}"],"transcriptPath":"{}"}}"#,
+            logs.join("transcript.jsonl").to_str().unwrap()
+        ),
+        env,
+    );
+
+    let out1 = run(
+        &["carryover-hook", "antigravity", "PreInvocation"],
+        &format!(r#"{{"workspacePaths":["{rp}"],"conversationId":"conv-1"}}"#),
+        env,
+    );
+    let v: Value = serde_json::from_str(out1.stdout.trim()).unwrap();
+    assert!(v["additionalContext"]
+        .as_str()
+        .unwrap()
+        .contains("resume me"));
+    assert!(
+        v.get("hookSpecificOutput").is_none(),
+        "agy must not nest: {}",
+        out1.stdout
+    );
+
+    // same conversation → deduped
+    let out2 = run(
+        &["carryover-hook", "antigravity", "PreInvocation"],
+        &format!(r#"{{"workspacePaths":["{rp}"],"conversationId":"conv-1"}}"#),
+        env,
+    );
+    assert!(
+        out2.stdout.trim().is_empty(),
+        "re-inject in same conversation: {:?}",
+        out2.stdout
+    );
+}
+
+/// A corrupt snapshot is preserved (not silently overwritten) and capture recovers.
+#[test]
+fn carryover_corrupt_snapshot_preserved() {
+    let home = tmp("cvhome10");
+    let root = project_root();
+    let (rp, hp) = (root.to_str().unwrap(), home.to_str().unwrap());
+    let env = &[("KEEL_HOME", hp), ("KEEL_ROOT", rp)];
+
+    run(
+        &["carryover-hook", "codex", "UserPromptSubmit"],
+        &format!(r#"{{"cwd":"{rp}","prompt":"FIRST"}}"#),
+        env,
+    );
+    let dir = fs::read_dir(home.join(".keel/carryover"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    fs::write(dir.join("snapshot.json"), "{ not json").unwrap();
+
+    run(
+        &["carryover-hook", "codex", "UserPromptSubmit"],
+        &format!(r#"{{"cwd":"{rp}","prompt":"SECOND"}}"#),
+        env,
+    );
+    assert!(
+        dir.join("snapshot.json.corrupt").exists(),
+        "corrupt file must be preserved"
+    );
+    assert_eq!(read_snapshot(&home)["goal"][0], "SECOND"); // recovered
+}
+
 /// A no-op hook (non-mutating tool) must not rewrite the store — provenance and the
 /// freshness timestamp of a prior capture stay intact.
 #[test]

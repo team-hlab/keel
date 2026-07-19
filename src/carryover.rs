@@ -423,21 +423,49 @@ impl Snapshot {
 }
 
 fn load_snapshot(dir: &std::path::Path) -> Snapshot {
-    std::fs::read_to_string(dir.join("snapshot.json"))
-        .ok()
-        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-        .map(|v| Snapshot::from_json(&v))
-        .unwrap_or_default()
+    let path = dir.join("snapshot.json");
+    let Ok(txt) = std::fs::read_to_string(&path) else {
+        return Snapshot::default(); // no store yet
+    };
+    match serde_json::from_str::<Value>(&txt) {
+        Ok(v) => Snapshot::from_json(&v),
+        Err(_) => {
+            // present but unparseable — preserve it instead of silently overwriting on the
+            // next capture (that was a data-loss bug).
+            let _ = std::fs::rename(&path, path.with_extension("json.corrupt"));
+            Snapshot::default()
+        }
+    }
+}
+
+/// Atomic, private write: tmp file (0600) → rename. Prevents torn reads under concurrent
+/// hooks and keeps the store from being world-readable.
+fn write_private(path: &std::path::Path, data: &str) {
+    let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
+    if std::fs::write(&tmp, data).is_err() {
+        return;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+    }
+    let _ = std::fs::rename(&tmp, path);
 }
 
 fn persist(snap: &Snapshot, dir: &std::path::Path) {
     let _ = std::fs::create_dir_all(dir);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    }
     let mut v = snap.to_json();
     v["updated"] = json!(now_secs()); // stamp real time at write
     if let Ok(j) = serde_json::to_string_pretty(&v) {
-        let _ = std::fs::write(dir.join("snapshot.json"), j);
+        write_private(&dir.join("snapshot.json"), &j);
     }
-    let _ = std::fs::write(dir.join("digest.md"), snap.render_digest());
+    write_private(&dir.join("digest.md"), &snap.render_digest());
 }
 
 /// "Disk state wins": flag ways the snapshot no longer matches reality, so the resuming
@@ -504,24 +532,100 @@ fn mutated_paths(event: &Event) -> Vec<String> {
     event.file_path().map(String::from).into_iter().collect()
 }
 
-/// SessionStart injection payload. Claude and Codex both read
-/// `hookSpecificOutput.additionalContext`; the Codex/Antigravity shapes are best-effort.
-fn render_injection(_platform: &str, digest: &str) -> String {
-    json!({
-        "hookSpecificOutput": {
-            "hookEventName": "SessionStart",
-            "additionalContext": digest,
+/// The injection payload — platform-specific envelope. Claude/Codex read a nested
+/// `hookSpecificOutput.additionalContext`; Antigravity (`agy`) reads a **top-level**
+/// `additionalContext` (the nested form fails agy schema validation).
+fn render_injection(platform: &str, digest: &str) -> String {
+    if platform == "antigravity" {
+        json!({ "additionalContext": digest }).to_string()
+    } else {
+        json!({
+            "hookSpecificOutput": {
+                "hookEventName": "SessionStart",
+                "additionalContext": digest,
+            }
+        })
+        .to_string()
+    }
+}
+
+/// Antigravity's `transcriptPath` points at `transcript.jsonl`; prefer the sibling
+/// `transcript_full.jsonl` (untruncated) when present.
+fn full_transcript(path: &str) -> String {
+    let p = std::path::Path::new(path);
+    if let Some(parent) = p.parent() {
+        let full = parent.join("transcript_full.jsonl");
+        if full.exists() {
+            return full.to_string_lossy().into_owned();
         }
-    })
-    .to_string()
+    }
+    path.to_string()
+}
+
+/// Parse an Antigravity transcript (JSONL step records) → (goal prompts, latest answer).
+/// User prompt = `USER_EXPLICIT`/`USER_INPUT`; answer = `MODEL`/`PLANNER_RESPONSE` (some
+/// MODEL steps are tool-/reasoning-only with no `content` — skip those). Redacted here.
+fn capture_antigravity<I: IntoIterator<Item = Value>>(records: I) -> (Vec<String>, Option<String>) {
+    let mut prompts: Vec<String> = Vec::new();
+    let mut result: Option<String> = None;
+    for rec in records {
+        let source = rec.get("source").and_then(Value::as_str);
+        let typ = rec.get("type").and_then(Value::as_str);
+        let content = rec
+            .get("content")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        match (source, typ, content) {
+            (Some("USER_EXPLICIT"), Some("USER_INPUT"), Some(c)) => {
+                prompts.push(secret_scan::redact(c));
+            }
+            (Some("MODEL"), Some("PLANNER_RESPONSE"), Some(c)) => {
+                result = Some(truncate(&secret_scan::redact(c), RESULT_CHARS));
+            }
+            _ => {}
+        }
+    }
+    let start = prompts.len().saturating_sub(KEEP_PROMPTS);
+    (prompts.split_off(start), result)
+}
+
+/// SessionStart / PreInvocation injection: render the stored digest if fresh + non-empty.
+/// Antigravity has no SessionStart, so it injects on `PreInvocation` — which fires every
+/// model call, so we inject at most once per `conversationId`.
+fn inject(platform: &str, dir: &std::path::Path, cwd: Option<&str>, conv: Option<&str>) -> i32 {
+    let snap = load_snapshot(dir);
+    if snap.is_empty() {
+        return 0; // nothing worth injecting
+    }
+    if let Some(u) = snap.updated {
+        if now_secs().saturating_sub(u) > FRESH_SECS {
+            return 0; // too stale to be "where you left off"
+        }
+    }
+    if platform == "antigravity" {
+        if let Some(c) = conv {
+            let marker = dir.join("injected_conv");
+            if std::fs::read_to_string(&marker).ok().as_deref() == Some(c) {
+                return 0; // already injected into this conversation
+            }
+            let _ = std::fs::write(&marker, c);
+        }
+    }
+    let mut digest = snap.render_digest();
+    if let Some(drift) = drift_note(&snap, cwd) {
+        digest.push_str(&drift); // disk-state-wins warnings
+    }
+    print!("{}", render_injection(platform, &digest));
+    0
 }
 
 /// Live hook entrypoint — `keel carryover-hook <platform> <stage>`. Reads the payload on stdin.
 ///
-///   * SessionStart (any agent)   → inject the stored digest as additionalContext.
-///   * claude, capture stage       → BATCH: read the rich transcript, rebuild the snapshot.
-///   * codex/antigravity, capture  → INCREMENTAL: accumulate from inline hook payloads
-///     (`UserPromptSubmit.prompt`, `Stop.last_assistant_message`, `PreToolUse.tool_input`).
+///   * inject stage (SessionStart, or PreInvocation for agy) → inject the stored digest.
+///   * claude    → BATCH: read the transcript on Stop/SessionEnd/PreCompact.
+///   * antigravity → BATCH goal/result from `transcript_full.jsonl` on Stop + incremental files.
+///   * codex     → INCREMENTAL: prompt/answer/files inline, one hook at a time.
 ///
 /// The store is agent-agnostic (keyed by git root), so a snapshot captured under one agent
 /// injects into any other — that is the cross-vendor carry. Fails open on any error.
@@ -531,23 +635,15 @@ pub fn run_hook(platform: &str, stage: &str) -> i32 {
     let event = adapters::parse(platform, &payload, stage);
     let dir = store_dir(event.cwd.as_deref());
 
-    if stage == "SessionStart" {
-        // Render fresh from the snapshot (source of truth).
-        let snap = load_snapshot(&dir);
-        if snap.is_empty() {
-            return 0; // nothing worth injecting
-        }
-        if let Some(u) = snap.updated {
-            if now_secs().saturating_sub(u) > FRESH_SECS {
-                return 0; // too stale to be "where you left off"
-            }
-        }
-        let mut digest = snap.render_digest();
-        if let Some(drift) = drift_note(&snap, event.cwd.as_deref()) {
-            digest.push_str(&drift); // disk-state-wins warnings
-        }
-        print!("{}", render_injection(platform, &digest));
-        return 0;
+    // Injection: SessionStart for claude/codex; PreInvocation for antigravity (no SessionStart).
+    let inject_stage = if platform == "antigravity" {
+        "PreInvocation"
+    } else {
+        "SessionStart"
+    };
+    if stage == inject_stage {
+        let conv = payload.get("conversationId").and_then(Value::as_str);
+        return inject(platform, &dir, event.cwd.as_deref(), conv);
     }
 
     if platform == "claude" {
@@ -565,7 +661,7 @@ pub fn run_hook(platform: &str, stage: &str) -> i32 {
         return 0;
     }
 
-    // INCREMENTAL: Codex/Antigravity deliver the pieces inline, one hook at a time.
+    // Codex + Antigravity share the store scaffolding.
     let mut snap = load_snapshot(&dir);
     if snap.root.is_none() {
         snap.root = event.cwd.clone();
@@ -580,29 +676,59 @@ pub fn run_hook(platform: &str, stage: &str) -> i32 {
     // Only persist when something was actually captured — a no-op hook (Read, missing field,
     // unknown stage) must not re-stamp `updated` (defeating freshness) or clobber `by`.
     let mut changed = false;
-    match stage {
-        "UserPromptSubmit" => {
-            if let Some(p) = payload.get("prompt").and_then(Value::as_str) {
-                snap.push_prompt(p);
-                changed = true;
+    if platform == "antigravity" {
+        match stage {
+            // BATCH goal/result from the transcript (agy has no inline prompt/answer hooks).
+            "Stop" => {
+                if let Some(tp) = payload.get("transcriptPath").and_then(Value::as_str) {
+                    if let Ok(records) = load_jsonl(&full_transcript(tp)) {
+                        let (goal, result) = capture_antigravity(records);
+                        if !goal.is_empty() {
+                            snap.goal = goal;
+                            changed = true;
+                        }
+                        if result.is_some() {
+                            snap.result = result;
+                            changed = true;
+                        }
+                    }
+                }
             }
-        }
-        "Stop" => {
-            if let Some(r) = payload
-                .get("last_assistant_message")
-                .and_then(Value::as_str)
-            {
-                snap.set_result(r);
-                changed = true;
+            // files come inline via tool calls (normalized by the adapter).
+            "PreToolUse" => {
+                for fp in mutated_paths(&event) {
+                    snap.push_file(&fp);
+                    changed = true;
+                }
             }
+            _ => {}
         }
-        "PreToolUse" => {
-            for fp in mutated_paths(&event) {
-                snap.push_file(&fp);
-                changed = true;
+    } else {
+        // Codex: prompt / answer / files all inline.
+        match stage {
+            "UserPromptSubmit" => {
+                if let Some(p) = payload.get("prompt").and_then(Value::as_str) {
+                    snap.push_prompt(p);
+                    changed = true;
+                }
             }
+            "Stop" => {
+                if let Some(r) = payload
+                    .get("last_assistant_message")
+                    .and_then(Value::as_str)
+                {
+                    snap.set_result(r);
+                    changed = true;
+                }
+            }
+            "PreToolUse" => {
+                for fp in mutated_paths(&event) {
+                    snap.push_file(&fp);
+                    changed = true;
+                }
+            }
+            _ => {}
         }
-        _ => {}
     }
     if changed {
         snap.by = Some(platform.to_string()); // provenance: codex / antigravity
@@ -732,5 +858,30 @@ mod tests {
         assert_eq!(reloaded.files, claude_snap.files);
         assert_eq!(reloaded.result, claude_snap.result);
         assert_eq!(reloaded.branch, claude_snap.branch);
+    }
+
+    // Antigravity transcript: USER_EXPLICIT/USER_INPUT → goal, MODEL/PLANNER_RESPONSE with
+    // content → result; content-less MODEL steps and other sources are skipped.
+    #[test]
+    fn antigravity_transcript_parse() {
+        let recs = vec![
+            json!({"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","content":"add a rate limiter"}),
+            json!({"step_index":3,"source":"MODEL","type":"PLANNER_RESPONSE","content":"Added a token bucket."}),
+            json!({"step_index":4,"source":"MODEL","type":"PLANNER_RESPONSE","tool_calls":[{"x":1}]}),
+            json!({"step_index":5,"source":"SYSTEM","type":"CONVERSATION_HISTORY","content":"noise"}),
+        ];
+        let (goal, result) = capture_antigravity(recs);
+        assert_eq!(goal, vec!["add a rate limiter"]);
+        assert_eq!(result.as_deref(), Some("Added a token bucket."));
+    }
+
+    // Injection envelope is platform-specific: nested for claude/codex, top-level for agy.
+    #[test]
+    fn injection_envelope_is_platform_specific() {
+        let claude: Value = serde_json::from_str(&render_injection("claude", "d")).unwrap();
+        assert!(claude["hookSpecificOutput"]["additionalContext"] == "d");
+        let agy: Value = serde_json::from_str(&render_injection("antigravity", "d")).unwrap();
+        assert!(agy["additionalContext"] == "d");
+        assert!(agy.get("hookSpecificOutput").is_none());
     }
 }
