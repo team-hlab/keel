@@ -28,6 +28,7 @@ command -v "$CLI" >/dev/null || { echo "SKIP[$AGENT]: '$CLI' not installed — c
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 export KEEL_HOME="$WORK/home"
 PROJ="$WORK/proj"; mkdir -p "$PROJ/.git"; echo "ref: refs/heads/main" > "$PROJ/.git/HEAD"
+printf '{"features":{"carryover":{"enabled":true}}}' > "$PROJ/.keel.json"   # opt in
 cd "$PROJ"
 MARK="CARRYOVER-$$-${RANDOM}"   # unique token session 1 states, session 2 must echo
 

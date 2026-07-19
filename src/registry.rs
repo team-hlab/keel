@@ -34,11 +34,16 @@ fn feature_config(config: &Value, name: &str) -> Value {
 }
 
 pub fn load(config: &Value) -> Vec<Box<dyn Feature>> {
-    let active: Vec<String> = NAMES
+    let mut active: Vec<String> = NAMES
         .iter()
         .filter(|n| enabled(config, n))
         .map(|s| s.to_string())
         .collect();
+    // carryover isn't a Verdict-Feature (it's a hook-installed subsystem), but the banner
+    // should still announce it when a project has opted in.
+    if crate::carryover::carryover_enabled(config) {
+        active.push("carryover".to_string());
+    }
 
     let mut features: Vec<Box<dyn Feature>> = Vec::new();
     if enabled(config, "autopermit") {
