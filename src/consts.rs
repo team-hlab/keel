@@ -26,3 +26,8 @@ pub const ENV_CONFIG: &str = "KEEL_CONFIG"; // path to the config file
 pub fn hook_command(platform: &str, stage: &str) -> String {
     format!("keel run {platform} {stage}")
 }
+
+/// The command a carryover hook invokes: `keel carryover-hook <platform> <stage>`.
+pub fn carryover_command(platform: &str, stage: &str) -> String {
+    format!("keel carryover-hook {platform} {stage}")
+}

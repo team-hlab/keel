@@ -23,13 +23,19 @@ fn tmp(prefix: &str) -> PathBuf {
     p
 }
 
-/// A project root with a git HEAD on `main` and the usual dirs.
+/// A project root with a git HEAD on `main` and the usual dirs. Enables carryover in
+/// `.keel.json` (inert for the policy features, which read their own config sub-keys).
 fn project_root() -> PathBuf {
     let root = tmp("root");
     for d in [".git", "worktrees/f", "projects/foo/main"] {
         fs::create_dir_all(root.join(d)).unwrap();
     }
     fs::write(root.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+    fs::write(
+        root.join(".keel.json"),
+        r#"{"features":{"carryover":{"enabled":true}}}"#,
+    )
+    .unwrap();
     root
 }
 
@@ -819,6 +825,29 @@ fn carryover_antigravity_preinvocation_injects_once() {
         out2.stdout.trim().is_empty(),
         "re-inject in same conversation: {:?}",
         out2.stdout
+    );
+}
+
+/// carryover is opt-in: with no `.keel.json` enable flag, the hook no-ops (no store).
+#[test]
+fn carryover_disabled_by_default_noops() {
+    let home = tmp("cvhome_off");
+    let root = project_root();
+    // override: explicitly disable carryover for this project
+    fs::write(
+        root.join(".keel.json"),
+        r#"{"features":{"carryover":{"enabled":false}}}"#,
+    )
+    .unwrap();
+    let (rp, hp) = (root.to_str().unwrap(), home.to_str().unwrap());
+    run(
+        &["carryover-hook", "codex", "UserPromptSubmit"],
+        &format!(r#"{{"cwd":"{rp}","prompt":"should be ignored"}}"#),
+        &[("KEEL_HOME", hp), ("KEEL_ROOT", rp)],
+    );
+    assert!(
+        fs::read_dir(home.join(".keel/carryover")).is_err(),
+        "disabled carryover must write no store"
     );
 }
 

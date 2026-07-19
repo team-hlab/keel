@@ -655,10 +655,24 @@ fn inject(platform: &str, dir: &std::path::Path, cwd: Option<&str>, conv: Option
 ///
 /// The store is agent-agnostic (keyed by git root), so a snapshot captured under one agent
 /// injects into any other — that is the cross-vendor carry. Fails open on any error.
+/// carryover is opt-in per project: `.keel.json` → `features.carryover.enabled = true`.
+/// Installed globally by `keel init`, but inert until a project turns it on.
+fn carryover_enabled(cfg: &Value) -> bool {
+    cfg.get("features")
+        .and_then(|f| f.get("carryover"))
+        .and_then(|c| c.get("enabled"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
 pub fn run_hook(platform: &str, stage: &str) -> i32 {
     let payload = runtime::read_input().unwrap_or(Value::Null);
     // Normalize via the vendor adapter: cwd (Antigravity uses workspacePaths) + neutral tool.
     let event = adapters::parse(platform, &payload, stage);
+    // Opt-in gate: no-op unless the project enabled carryover.
+    if !carryover_enabled(&runtime::load_config(&event.root)) {
+        return 0;
+    }
     let dir = store_dir(event.cwd.as_deref());
 
     // Injection: SessionStart for claude/codex; PreInvocation for antigravity (no SessionStart).

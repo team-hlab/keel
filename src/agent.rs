@@ -63,6 +63,32 @@ const STAGES: &[(&str, bool)] = &[
     ("SessionStart", false),
 ];
 
+/// carryover's hook stages per agent — `(stage, needs_tool_matcher)`, invoked as
+/// `keel carryover-hook <name> <stage>`. Installed by `keel init` but inert unless a
+/// project opts in via `.keel.json` (`features.carryover.enabled`). Inject stage differs:
+/// SessionStart for Claude/Codex, PreInvocation for Antigravity (it has no SessionStart).
+fn carryover_stages(agent: &str) -> &'static [(&'static str, bool)] {
+    match agent {
+        "claude" => &[
+            ("SessionStart", false),
+            ("Stop", false),
+            ("SessionEnd", false),
+        ],
+        "codex" => &[
+            ("SessionStart", false),
+            ("UserPromptSubmit", false),
+            ("Stop", false),
+            ("PreToolUse", true),
+        ],
+        "antigravity" => &[
+            ("PreInvocation", false),
+            ("Stop", false),
+            ("PreToolUse", true),
+        ],
+        _ => &[],
+    }
+}
+
 /// $KEEL_HOME (test/override) or $HOME.
 pub fn home() -> PathBuf {
     if let Some(h) = std::env::var_os(consts::ENV_HOME) {
@@ -170,9 +196,36 @@ fn entry_has_cmd(e: &Value, cmd: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Insert one `__keel`-tagged hook entry into `container[stage]` (idempotent by command).
+fn insert_hook(
+    container: &mut Map<String, Value>,
+    stage: &str,
+    cmd: &str,
+    matcher: Option<&str>,
+) -> bool {
+    let arr_v = container
+        .entry(stage.to_string())
+        .or_insert_with(|| Value::Array(vec![]));
+    if !arr_v.is_array() {
+        *arr_v = Value::Array(vec![]);
+    }
+    let arr = arr_v.as_array_mut().unwrap();
+    if arr.iter().any(|e| entry_has_cmd(e, cmd)) {
+        return false;
+    }
+    let mut entry = json!({ "hooks": [ { "type": "command", "command": cmd } ] });
+    let obj = entry.as_object_mut().unwrap();
+    obj.insert(consts::KEEL_MARKER.into(), Value::Bool(true));
+    if let Some(m) = matcher {
+        obj.insert("matcher".into(), json!(m));
+    }
+    arr.push(entry);
+    true
+}
+
 /// Merge keel's hooks into the agent's config under `a.hooks_container` → `<stage>` →
-/// `[{matcher?, hooks:[{type:"command", command}], __keel}]`. Claude/Codex use the `"hooks"`
-/// container; Antigravity uses its `"keel"` namespace. Idempotent + non-destructive.
+/// `[{matcher?, hooks:[{type:"command", command}], __keel}]` — the policy hooks (`keel run`)
+/// plus carryover's (`keel carryover-hook`). Idempotent + non-destructive.
 fn apply_hooks(cfg: &mut Value, a: &Agent) -> bool {
     let mut changed = false;
     let root = ensure_obj(cfg);
@@ -180,26 +233,17 @@ fn apply_hooks(cfg: &mut Value, a: &Agent) -> bool {
         .entry(a.hooks_container)
         .or_insert_with(|| Value::Object(Map::new()));
     let container = ensure_obj(container);
+    // policy hooks (`keel run …`)
     for (stage, needs_matcher) in STAGES {
         let cmd = consts::hook_command(a.name, stage);
-        let arr_v = container
-            .entry(*stage)
-            .or_insert_with(|| Value::Array(vec![]));
-        if !arr_v.is_array() {
-            *arr_v = Value::Array(vec![]);
-        }
-        let arr = arr_v.as_array_mut().unwrap();
-        if arr.iter().any(|e| entry_has_cmd(e, &cmd)) {
-            continue;
-        }
-        let mut entry = json!({ "hooks": [ { "type": "command", "command": cmd } ] });
-        let obj = entry.as_object_mut().unwrap();
-        obj.insert(consts::KEEL_MARKER.into(), Value::Bool(true));
-        if *needs_matcher {
-            obj.insert("matcher".into(), json!(a.tool_matcher));
-        }
-        arr.push(entry);
-        changed = true;
+        let m = needs_matcher.then_some(a.tool_matcher);
+        changed |= insert_hook(container, stage, &cmd, m);
+    }
+    // carryover hooks (`keel carryover-hook …`) — gated per-project at run time
+    for (stage, needs_matcher) in carryover_stages(a.name) {
+        let cmd = consts::carryover_command(a.name, stage);
+        let m = needs_matcher.then_some(a.tool_matcher);
+        changed |= insert_hook(container, stage, &cmd, m);
     }
     changed
 }
@@ -303,10 +347,11 @@ mod tests {
         let claude = agent_by_bin("claude").unwrap();
         assert!(apply(claude).unwrap()); // first apply changes
         assert!(!apply(claude).unwrap()); // idempotent — no further change
-        assert_eq!(applied_count(claude), 3);
+        assert_eq!(applied_count(claude), 6); // 3 policy + 3 carryover
 
         let txt = std::fs::read_to_string(hooks_path(claude)).unwrap();
         assert!(txt.contains("keel run claude PreToolUse"));
+        assert!(txt.contains("keel carryover-hook claude Stop")); // carryover installed too
         assert!(txt.contains(consts::KEEL_MARKER));
         assert!(txt.contains(TOOL_MATCHER));
 
