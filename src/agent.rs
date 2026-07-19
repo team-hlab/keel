@@ -13,8 +13,10 @@ pub struct Agent {
     pub home: &'static str,      // config dir under $HOME (detection + hooks)
     pub hooks_rel: &'static str, // hooks file relative to the home dir
     pub hooks_container: &'static str, // top-level key the per-stage hooks nest under
-    pub tool_matcher: &'static str, // regex matched against the tool name
+    pub tool_matcher: &'static str, // regex matched against the tool name (policy hooks)
     pub home_is_exclusive: bool, // is `home` unique to this agent? (else require the binary)
+    pub carryover_stages: &'static [(&'static str, bool)], // (stage, wants write-matcher)
+    pub write_matcher: &'static str, // write-only tools — carryover's PreToolUse capture
 }
 
 pub const AGENTS: &[Agent] = &[
@@ -26,6 +28,8 @@ pub const AGENTS: &[Agent] = &[
         hooks_container: "hooks",
         tool_matcher: TOOL_MATCHER,
         home_is_exclusive: true, // ~/.claude is Claude Code's alone
+        carryover_stages: CLAUDE_CARRYOVER,
+        write_matcher: WRITE_MATCHER,
     },
     Agent {
         name: "codex",
@@ -35,6 +39,8 @@ pub const AGENTS: &[Agent] = &[
         hooks_container: "hooks",
         tool_matcher: TOOL_MATCHER,
         home_is_exclusive: true, // ~/.codex is Codex's alone
+        carryover_stages: CODEX_CARRYOVER,
+        write_matcher: WRITE_MATCHER,
     },
     Agent {
         name: "antigravity",
@@ -50,6 +56,8 @@ pub const AGENTS: &[Agent] = &[
         // ~/.gemini is shared with the Gemini CLI, so it doesn't imply Antigravity —
         // require the `agy` binary on PATH to detect it.
         home_is_exclusive: false,
+        carryover_stages: ANTIGRAVITY_CARRYOVER,
+        write_matcher: ANTIGRAVITY_WRITE_MATCHER,
     },
 ];
 
@@ -57,37 +65,35 @@ pub const AGENTS: &[Agent] = &[
 const TOOL_MATCHER: &str = "Read|Glob|Grep|Edit|MultiEdit|Write|NotebookEdit|Bash|apply_patch";
 // Antigravity's own tool names — the ones keel gates (shell · writes · content reads).
 const ANTIGRAVITY_MATCHER: &str = "run_command|write_to_file|replace_file_content|multi_replace_file_content|view_file|view_code_item|search_in_file|view_file_outline|grep_search";
+// Write tools only — carryover's PreToolUse captures mutations, so it need not fire on reads.
+const WRITE_MATCHER: &str = "Edit|MultiEdit|Write|NotebookEdit|apply_patch";
+const ANTIGRAVITY_WRITE_MATCHER: &str =
+    "write_to_file|replace_file_content|multi_replace_file_content";
 const STAGES: &[(&str, bool)] = &[
     ("PreToolUse", true),
     ("PermissionRequest", true),
     ("SessionStart", false),
 ];
 
-/// carryover's hook stages per agent — `(stage, needs_tool_matcher)`, invoked as
-/// `keel carryover-hook <name> <stage>`. Installed by `keel init` but inert unless a
-/// project opts in via `.keel.json` (`features.carryover.enabled`). Inject stage differs:
-/// SessionStart for Claude/Codex, PreInvocation for Antigravity (it has no SessionStart).
-fn carryover_stages(agent: &str) -> &'static [(&'static str, bool)] {
-    match agent {
-        "claude" => &[
-            ("SessionStart", false),
-            ("Stop", false),
-            ("SessionEnd", false),
-        ],
-        "codex" => &[
-            ("SessionStart", false),
-            ("UserPromptSubmit", false),
-            ("Stop", false),
-            ("PreToolUse", true),
-        ],
-        "antigravity" => &[
-            ("PreInvocation", false),
-            ("Stop", false),
-            ("PreToolUse", true),
-        ],
-        _ => &[],
-    }
-}
+// carryover's hook stages per agent — `(stage, wants_write_matcher)`, invoked as
+// `keel carryover-hook <name> <stage>`. Inject stage differs: SessionStart for Claude/Codex,
+// PreInvocation for Antigravity (it has no SessionStart).
+const CLAUDE_CARRYOVER: &[(&str, bool)] = &[
+    ("SessionStart", false),
+    ("Stop", false),
+    ("SessionEnd", false),
+];
+const CODEX_CARRYOVER: &[(&str, bool)] = &[
+    ("SessionStart", false),
+    ("UserPromptSubmit", false),
+    ("Stop", false),
+    ("PreToolUse", true),
+];
+const ANTIGRAVITY_CARRYOVER: &[(&str, bool)] = &[
+    ("PreInvocation", false),
+    ("Stop", false),
+    ("PreToolUse", true),
+];
 
 /// $KEEL_HOME (test/override) or $HOME.
 pub fn home() -> PathBuf {
@@ -239,10 +245,11 @@ fn apply_hooks(cfg: &mut Value, a: &Agent) -> bool {
         let m = needs_matcher.then_some(a.tool_matcher);
         changed |= insert_hook(container, stage, &cmd, m);
     }
-    // carryover hooks (`keel carryover-hook …`) — gated per-project at run time
-    for (stage, needs_matcher) in carryover_stages(a.name) {
+    // carryover hooks (`keel carryover-hook …`) — gated per-project at run time. PreToolUse
+    // uses the WRITE-only matcher (capture only fires on mutations, not reads).
+    for (stage, wants_write_matcher) in a.carryover_stages {
         let cmd = consts::carryover_command(a.name, stage);
-        let m = needs_matcher.then_some(a.tool_matcher);
+        let m = wants_write_matcher.then_some(a.write_matcher);
         changed |= insert_hook(container, stage, &cmd, m);
     }
     changed
@@ -509,6 +516,34 @@ mod tests {
             .get("matcher")
             .and_then(|m| m.as_str())
             .is_some_and(|m| m.contains("run_command")));
+
+        std::env::remove_var(consts::ENV_HOME);
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn carryover_pretooluse_uses_write_only_matcher() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tmp = std::env::temp_dir().join(format!("keel-cvm-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::env::set_var(consts::ENV_HOME, &tmp);
+
+        let codex = agent_by_bin("codex").unwrap();
+        apply(codex).unwrap();
+        let cfg: Value =
+            serde_json::from_str(&std::fs::read_to_string(hooks_path(codex)).unwrap()).unwrap();
+        let cv = cfg["hooks"]["PreToolUse"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["hooks"][0]["command"] == "keel carryover-hook codex PreToolUse")
+            .expect("carryover PreToolUse entry");
+        let matcher = cv["matcher"].as_str().unwrap();
+        assert!(matcher.contains("Write") && matcher.contains("apply_patch"));
+        assert!(
+            !matcher.contains("Read"),
+            "must not fire on reads: {matcher}"
+        );
 
         std::env::remove_var(consts::ENV_HOME);
         std::fs::remove_dir_all(&tmp).ok();

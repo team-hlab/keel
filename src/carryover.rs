@@ -657,7 +657,7 @@ fn inject(platform: &str, dir: &std::path::Path, cwd: Option<&str>, conv: Option
 /// injects into any other — that is the cross-vendor carry. Fails open on any error.
 /// carryover is opt-in per project: `.keel.json` → `features.carryover.enabled = true`.
 /// Installed globally by `keel init`, but inert until a project turns it on.
-fn carryover_enabled(cfg: &Value) -> bool {
+pub fn carryover_enabled(cfg: &Value) -> bool {
     cfg.get("features")
         .and_then(|f| f.get("carryover"))
         .and_then(|c| c.get("enabled"))

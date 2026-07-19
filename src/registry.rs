@@ -41,13 +41,7 @@ pub fn load(config: &Value) -> Vec<Box<dyn Feature>> {
         .collect();
     // carryover isn't a Verdict-Feature (it's a hook-installed subsystem), but the banner
     // should still announce it when a project has opted in.
-    if config
-        .get("features")
-        .and_then(|f| f.get("carryover"))
-        .and_then(|c| c.get("enabled"))
-        .and_then(Value::as_bool)
-        == Some(true)
-    {
+    if crate::carryover::carryover_enabled(config) {
         active.push("carryover".to_string());
     }
 
