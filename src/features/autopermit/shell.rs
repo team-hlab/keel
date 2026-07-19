@@ -22,6 +22,8 @@ static SINGLE_QUOTED: LazyLock<Regex> = LazyLock::new(|| rx(r"'[^']*'"));
 static EXPANSION: LazyLock<Regex> = LazyLock::new(|| rx(r"\$[A-Za-z_{(]"));
 static FILE_WRITE: LazyLock<Regex> =
     LazyLock::new(|| rx(r"^(mkdir|cp|mv|rm|touch|chmod|ln|rsync|tee)\b"));
+// Copy commands read their source operand(s): `cp .env /tmp/x` exfiltrates a secret.
+static COPY_CMD: LazyLock<Regex> = LazyLock::new(|| rx(r"^(cp|mv|rsync)\b"));
 static GIT_WRITE: LazyLock<Regex> = LazyLock::new(|| {
     rx(
         r"^git\s+(-C\s+\S+\s+)?(add|commit|push|checkout|switch|stash|merge|rebase|cherry-pick|restore|tag)\b",
@@ -42,7 +44,7 @@ static SED_INPLACE: LazyLock<Regex> = LazyLock::new(|| rx(r"^sed\s+-i"));
 // SAFE and skip the check — they don't reveal contents.
 static READ_CMDS: LazyLock<Regex> = LazyLock::new(|| {
     rx(
-        r"^(cat|head|tail|less|more|nl|tac|xxd|od|hexdump|base64|base32|strings|grep|egrep|fgrep|rg|awk|sed|cut|sort|uniq|tr|jq|column|rev|fold|comm|join|paste|diff)\b",
+        r"^(cat|head|tail|less|more|nl|tac|xxd|od|hexdump|base64|base32|strings|grep|egrep|fgrep|rg|awk|sed|cut|sort|uniq|tr|jq|column|rev|fold|comm|join|paste|diff|zcat|gzcat|bzcat|xzcat|zstdcat|pv)\b",
     )
 });
 // Pattern-first readers: the first operand is a search pattern / script, not a file, so it's
@@ -97,11 +99,8 @@ static BUILD_TEST: LazyLock<Vec<Regex>> = LazyLock::new(|| {
 });
 static DENY: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     vec![
-        // root spellings: `/`, `//`, `/.`, `/../`, `/*`, `~`, `$HOME` (target must be a whole arg)
-        rx(r"\brm\s+-[a-zA-Z]*r[a-zA-Z]*f?\s+(/[./]*|/\*|~|\$HOME)(\s|$)"),
-        rx(r"\brm\s+-[a-zA-Z]*f[a-zA-Z]*r?\s+(/[./]*|/\*|~|\$HOME)(\s|$)"),
-        // long-option form: `rm --recursive --force /`
-        rx(r"\brm\s+.*--(recursive|force)\b.*\s(/[./]*|/\*|~|\$HOME)(\s|$)"),
+        // NOTE: catastrophic `rm -rf /` is handled by `catastrophic_rm` (command-aware, robust
+        // to quoting/escaping/braces, and won't false-deny `echo "rm -rf /"`), not by a regex.
         rx(r"\bgit\s+(-C\s+\S+\s+)?push\b.*(--force\b|-f\b)"),
         rx(r"\bgit\s+(-C\s+\S+\s+)?reset\s+--hard\b"),
         rx(r"\bgit\s+(-C\s+\S+\s+)?clean\s+-[a-zA-Z]*f"),
@@ -719,6 +718,39 @@ fn strip_prefixes(seg: &str) -> String {
     s
 }
 
+/// Is a token a root-equivalent target: `/`, `//`, `/.`, `/../`, `/*`, `~`, `~/`, `$HOME`?
+fn is_root_target(t: &str) -> bool {
+    matches!(t, "/" | "~" | "~/" | "$HOME" | "/*")
+        || (t.starts_with('/') && t.chars().all(|c| c == '/' || c == '.'))
+}
+
+/// Command-aware catastrophic `rm`: the *first* token is `rm`, with a recursive flag and a
+/// root-equivalent operand. `tokenize` has already unescaped/decoded/dequoted, so this catches
+/// `rm -rf "/"`, `rm -rf $'\x2f'`, `r\m -rf /` — and does NOT fire on `echo "rm -rf /"` (echo is
+/// the command, not rm), which the raw-string DENY regex false-denies.
+fn catastrophic_rm(s: &str) -> bool {
+    let toks: Vec<String> = tokenize(s).iter().flat_map(|t| brace_expand(t)).collect();
+    if toks.first().map(String::as_str) != Some("rm") {
+        return false;
+    }
+    let mut recursive = false;
+    let mut root = false;
+    for t in &toks[1..] {
+        if t == "--recursive" {
+            recursive = true;
+        } else if t.starts_with("--") {
+            // other long option, ignore
+        } else if let Some(flags) = t.strip_prefix('-') {
+            if flags.contains(['r', 'R']) {
+                recursive = true;
+            }
+        } else if is_root_target(t) {
+            root = true;
+        }
+    }
+    recursive && root
+}
+
 fn classify_write(
     target: &str,
     exec_base: &str,
@@ -753,6 +785,12 @@ fn classify_segment(
     protected: Decision,
     depth: u8,
 ) -> Decision {
+    // catastrophic `rm` of root — checked first (before the `$`/paren bail-outs) so
+    // `rm -rf $HOME` / `rm -rf "/"` still deny. Command-aware, so `echo "rm -rf /"` doesn't.
+    let s = strip_prefixes(seg);
+    if catastrophic_rm(&s) {
+        return Decision::Deny;
+    }
     // DENY is enforced on the whole command in decide_bash, so it can't reach here.
     if has_expansion(seg) {
         return Decision::Pass;
@@ -780,7 +818,6 @@ fn classify_segment(
         }
     }
 
-    let s = strip_prefixes(seg);
     // `sh -c '<script>'` re-parses and runs the script → recurse into it (depth-bounded) so it's
     // gated, not deferred. `$`/backtick scripts already bailed to Pass via has_expansion above.
     if SHELL_C.is_match(&s) {
@@ -816,6 +853,23 @@ fn classify_segment(
         return worsen(worst, Decision::Pass);
     }
     if FILE_WRITE.is_match(&s) {
+        // `cp`/`mv`/`rsync` read their source operands (all but the last) — `cp .env /tmp/x`
+        // exfiltrates the secret even though the *write* target is innocuous.
+        if COPY_CMD.is_match(&s) {
+            let ops: Vec<String> = tokenize(&s)
+                .into_iter()
+                .skip(1)
+                .filter(|t| !t.starts_with('-'))
+                .flat_map(|t| brace_expand(&t))
+                .collect();
+            if ops.len() >= 2
+                && ops[..ops.len() - 1]
+                    .iter()
+                    .any(|t| is_sensitive_operand(t, patterns, witnesses))
+            {
+                worst = worsen(worst, Decision::Ask);
+            }
+        }
         let v = match last_path_arg(&s) {
             Some(t) => classify_write(&t, &exec_dir, root, patterns, regexes, resolve, protected),
             None => Decision::Pass,
@@ -1041,8 +1095,20 @@ mod tests {
             "rm -rf $'\\x2f'",
             "rm --recursive --force /",
             "bash -lc 'rm -rf /'",
+            "rm -rf \"/\"", // quoted root (command-aware catastrophic_rm)
+            "rm -rf '/'",
+            "rm -rf $HOME",
+            "rm -r ~",
         ] {
             assert_eq!(d(c, ROOT), Decision::Deny, "{c}");
+        }
+        // command-aware: a quoted MENTION of rm is not an rm invocation → must NOT deny
+        for c in [
+            "echo \"please rm -rf / now\"",
+            "grep 'rm -rf /' script.sh",
+            "cat notes-about-rm-rf.md",
+        ] {
+            assert_ne!(d(c, ROOT), Decision::Deny, "false-deny: {c}");
         }
     }
 
@@ -1071,6 +1137,11 @@ mod tests {
             "cat $'\\u002eenv'", // ANSI-C unicode escape → ".env"
             "cat $\".env\"",     // locale `$"..."` quoting
             "bash -lc 'cat .env'", // combined shell flag `-lc`
+            "zcat .env",         // compression reader
+            "xzcat credentials.json",
+            "cp .env /tmp/x", // copy source is a read (exfil)
+            "mv id_rsa /tmp/",
+            "rsync credentials.json remote:",
         ] {
             assert_eq!(d(c, ROOT), Decision::Ask, "{c}");
         }
