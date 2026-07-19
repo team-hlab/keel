@@ -517,8 +517,15 @@ fn git_branch(cwd: Option<&str>) -> Option<String> {
         }
         if dotgit.is_file() {
             let content = std::fs::read_to_string(&dotgit).ok()?;
-            let gitdir = content.trim().strip_prefix("gitdir: ")?;
-            return head_ref(&std::path::Path::new(gitdir).join("HEAD"));
+            let gitdir = std::path::Path::new(content.trim().strip_prefix("gitdir: ")?);
+            // git writes an absolute path by default; tolerate a relative one (resolve vs the
+            // worktree dir).
+            let gitdir = if gitdir.is_absolute() {
+                gitdir.to_path_buf()
+            } else {
+                cur.join(gitdir)
+            };
+            return head_ref(&gitdir.join("HEAD"));
         }
         if !cur.pop() {
             return None;
@@ -917,7 +924,25 @@ mod tests {
         // plain repo → its own HEAD; worktree → the WORKTREE's branch, not main's
         assert_eq!(git_branch(main.to_str()).as_deref(), Some("develop"));
         assert_eq!(git_branch(wt.to_str()).as_deref(), Some("feature-x"));
+
+        // a relative gitdir pointer is tolerated (resolved vs the worktree dir)
+        let wt_rel = base.join("wt_rel");
+        fs::create_dir_all(&wt_rel).unwrap();
+        fs::write(wt_rel.join(".git"), "gitdir: ../main/.git/worktrees/wt").unwrap();
+        assert_eq!(git_branch(wt_rel.to_str()).as_deref(), Some("feature-x"));
+
         fs::remove_dir_all(&base).ok();
+    }
+
+    // Detached HEAD (raw sha, no `ref: refs/heads/…`) → no branch, no crash.
+    #[test]
+    fn git_branch_none_on_detached_head() {
+        use std::fs;
+        let d = std::env::temp_dir().join(format!("keel-det-{}", std::process::id()));
+        fs::create_dir_all(d.join(".git")).unwrap();
+        fs::write(d.join(".git/HEAD"), "a1b2c3d4e5f6a7b8c9d0\n").unwrap();
+        assert_eq!(git_branch(d.to_str()), None);
+        fs::remove_dir_all(&d).ok();
     }
 
     // Injection envelope is platform-specific: nested for claude/codex, top-level for agy.
