@@ -1,8 +1,15 @@
 //! Pure file-tool decisions. No I/O.
 
+use std::sync::LazyLock;
+
 use regex::Regex;
 
 use crate::model::Decision;
+
+/// An unexpanded brace *expansion* (`{a,b}`, `{1..9}`) still present in an operand — means brace
+/// expansion couldn't resolve it. A literal `{}` (find's placeholder) or `{single}` is NOT this.
+static UNEXPANDED_BRACE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\{[^{}]*(,|\.\.)[^{}]*\}").unwrap());
 
 pub const READ_TOOLS: &[&str] = &["Read", "Glob", "Grep", "NotebookRead"];
 pub const WRITE_TOOLS: &[&str] = &["Edit", "MultiEdit", "Write", "NotebookEdit"];
@@ -99,6 +106,11 @@ pub fn glob_witness(glob: &str) -> String {
 /// literal glob against the patterns would miss it. Ordinary globs (`cat *.log`) don't overlap
 /// any sensitive witness, so they stay allowed — no added prompt fatigue.
 pub fn is_sensitive_operand(operand: &str, patterns: &[Regex], witnesses: &[String]) -> bool {
+    // An unresolved brace expansion (nested/huge/malformed) could still hide a secret variant —
+    // fail closed. A literal `{}` (find placeholder) or `{single}` is not an expansion.
+    if UNEXPANDED_BRACE.is_match(operand) {
+        return true;
+    }
     if is_sensitive(Some(operand), patterns) {
         return true;
     }

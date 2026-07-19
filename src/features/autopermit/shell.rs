@@ -31,8 +31,6 @@ static GIT_C: LazyLock<Regex> = LazyLock::new(|| rx(r"\bgit\s+-C\s+(\S+)"));
 static LEADING_CD: LazyLock<Regex> = LazyLock::new(|| rx(r"^\(?cd\s+(\S+)\s+&&"));
 static OUTER_SUBSHELL: LazyLock<Regex> =
     LazyLock::new(|| rx(r"(?s)^\((.*)\)\s*(?:\d*>&\d+\s*|\|\|\s*(?:true|:)\s*)*$"));
-static FD_REDIR: LazyLock<Regex> = LazyLock::new(|| rx(r"\d*>&\d+"));
-static DEVNULL: LazyLock<Regex> = LazyLock::new(|| rx(r"\d*>\s*/dev/null"));
 static REDIR: LazyLock<Regex> = LazyLock::new(|| rx(r">{1,2}\|?\s*([^\s;|&]+)"));
 static TEE: LazyLock<Regex> = LazyLock::new(|| rx(r"\|\s*tee\s+(?:-a\s+)?([^\s;|&]+)"));
 static SED_INPLACE: LazyLock<Regex> = LazyLock::new(|| rx(r"^sed\s+-i"));
@@ -64,12 +62,12 @@ static FIND_EXEC: LazyLock<Regex> = LazyLock::new(|| rx(r"^find\b.*\s-(exec|exec
 // A shell invoked with `-c <script>`: the script is re-parsed and run, so we recurse into it
 // (depth-bounded) rather than defer — `bash -c 'cat .env'` should gate like `cat .env`.
 static SHELL_C: LazyLock<Regex> =
-    LazyLock::new(|| rx(r"^(sh|bash|zsh|dash|ash|ksh)\s+(?:\S+\s+)*-c(\s|$)"));
+    LazyLock::new(|| rx(r"^(sh|bash|zsh|dash|ash|ksh)\s+(?:\S+\s+)*-[a-zA-Z]*c(\s|$)"));
 // Input redirect `< file` / `N< file` (fd-numbered), but not `<<` heredoc, `<&` fd-dup, or
 // `<(` process-sub. The file's contents flow into the command's stdin → a read to gate. The
 // target char-class starting with a path char is what excludes `<<`/`<&`/`<(`.
 static INPUT_REDIR: LazyLock<Regex> =
-    LazyLock::new(|| rx(r"(?:^|[^<])\d*<\s*([A-Za-z0-9_./~*?\[][^\s;|&<>]*)"));
+    LazyLock::new(|| rx(r#"(?:^|[^<])\d*<\s*(['"]?[A-Za-z0-9_./~*?\[][^\s;|&<>]*)"#));
 
 static SAFE: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     vec![
@@ -99,8 +97,11 @@ static BUILD_TEST: LazyLock<Vec<Regex>> = LazyLock::new(|| {
 });
 static DENY: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     vec![
-        rx(r"\brm\s+-[a-zA-Z]*r[a-zA-Z]*f?\s+(/|~|\$HOME|/\*)(\s|$)"),
-        rx(r"\brm\s+-[a-zA-Z]*f[a-zA-Z]*r?\s+(/|~|\$HOME|/\*)(\s|$)"),
+        // root spellings: `/`, `//`, `/.`, `/../`, `/*`, `~`, `$HOME` (target must be a whole arg)
+        rx(r"\brm\s+-[a-zA-Z]*r[a-zA-Z]*f?\s+(/[./]*|/\*|~|\$HOME)(\s|$)"),
+        rx(r"\brm\s+-[a-zA-Z]*f[a-zA-Z]*r?\s+(/[./]*|/\*|~|\$HOME)(\s|$)"),
+        // long-option form: `rm --recursive --force /`
+        rx(r"\brm\s+.*--(recursive|force)\b.*\s(/[./]*|/\*|~|\$HOME)(\s|$)"),
         rx(r"\bgit\s+(-C\s+\S+\s+)?push\b.*(--force\b|-f\b)"),
         rx(r"\bgit\s+(-C\s+\S+\s+)?reset\s+--hard\b"),
         rx(r"\bgit\s+(-C\s+\S+\s+)?clean\s+-[a-zA-Z]*f"),
@@ -222,9 +223,8 @@ fn seg_exec_dir(seg: &str, base: &str, resolve: &dyn Fn(&str, &str) -> String) -
     }
 }
 
-/// Blank out single/double-quoted regions (content + quotes → spaces). A real redirect operator
-/// is never inside quotes, so masking before scanning kills false positives like `grep '=>' f`
-/// or `grep '<x>' f` being read as writes/reads — without missing any real redirect.
+/// Blank out single/double-quoted regions (content + quotes → spaces). Used only for the
+/// subshell-paren check, where we care whether a bare `(` exists, not about positions.
 fn mask_quoted(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut q: Option<char> = None;
@@ -248,16 +248,44 @@ fn mask_quoted(s: &str) -> String {
     out
 }
 
-fn redirect_targets(seg: &str) -> Vec<String> {
-    let masked = mask_quoted(seg);
-    let clean = FD_REDIR.replace_all(&masked, " ");
-    let clean = DEVNULL.replace_all(&clean, " ");
-    let mut out = Vec::new();
-    for c in REDIR.captures_iter(&clean) {
-        out.push(c[1].trim_matches(['"', '\'']).to_string());
+/// Is byte offset `pos` inside a single/double-quoted region? A redirect operator inside quotes
+/// (`grep '=>' f`) is data, not a redirect — but the *target* of a real redirect may itself be
+/// quoted (`> '.env'`), so we test the operator's position rather than blanking the target.
+fn inside_quote(s: &str, pos: usize) -> bool {
+    let mut q: Option<char> = None;
+    for (i, c) in s.char_indices() {
+        if i >= pos {
+            break;
+        }
+        match q {
+            Some(qc) => {
+                if c == qc {
+                    q = None;
+                }
+            }
+            None => {
+                if c == '\'' || c == '"' {
+                    q = Some(c);
+                }
+            }
+        }
     }
-    for c in TEE.captures_iter(&clean) {
-        out.push(c[1].trim_matches(['"', '\'']).to_string());
+    q.is_some()
+}
+
+fn redirect_targets(seg: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for c in REDIR.captures_iter(seg).chain(TEE.captures_iter(seg)) {
+        let m = c.get(0).unwrap();
+        // skip a `>`/`|tee` that's inside quotes (a quoted `>` is data, not a redirect)
+        if inside_quote(seg, m.start() + m.as_str().find(['>', 't']).unwrap_or(0)) {
+            continue;
+        }
+        let t = c[1].trim_matches(['"', '\'']);
+        if t.is_empty() || t == "/dev/null" || t.starts_with("&") {
+            continue;
+        }
+        out.push(t.to_string());
     }
     out
 }
@@ -330,6 +358,18 @@ fn tokenize(s: &str) -> Vec<String> {
                 }
                 buf.push_str(&decode_ansi_c(&raw));
             }
+            // locale translation `$"..."` — bash strips the `$` and treats the body as a
+            // double-quoted string, so `cat $".env"` reads `.env`. Drop `$`, consume the body.
+            '$' if chars.peek() == Some(&'"') => {
+                chars.next(); // opening "
+                has = true;
+                for c in chars.by_ref() {
+                    if c == '"' {
+                        break;
+                    }
+                    buf.push(c);
+                }
+            }
             c if c.is_whitespace() => {
                 if has {
                     out.push(std::mem::take(&mut buf));
@@ -377,6 +417,22 @@ fn decode_ansi_c(s: &str) -> String {
                     out.push(n as char);
                 }
             }
+            Some(u @ ('u' | 'U')) => {
+                let width = if u == 'u' { 4 } else { 8 };
+                let mut h = String::new();
+                while h.len() < width {
+                    match chars.peek() {
+                        Some(d) if d.is_ascii_hexdigit() => {
+                            h.push(*d);
+                            chars.next();
+                        }
+                        _ => break,
+                    }
+                }
+                if let Some(ch) = u32::from_str_radix(&h, 16).ok().and_then(char::from_u32) {
+                    out.push(ch);
+                }
+            }
             Some(d) if d.is_digit(8) => {
                 let mut o = d.to_string();
                 while o.len() < 3 {
@@ -399,30 +455,111 @@ fn decode_ansi_c(s: &str) -> String {
     out
 }
 
-/// Expand one level of `{a,b,c}` comma-lists so `cat {.env,x}` yields `.env` as a candidate.
-/// Bounded; ranges (`{1..9}`) and nesting aren't handled (they fall through as-is).
+/// Expand `{a,b,c}` comma-lists and `{a..z}`/`{1..9}` ranges (nested too) so a secret hidden in
+/// a brace form becomes a candidate. Anything it can't expand (too many variants, malformed) is
+/// returned WITH its braces intact — `is_sensitive_operand` treats a leftover `{`/`}` as
+/// sensitive, so unexpandable braces fail closed to `ask` rather than slipping through.
 fn brace_expand(s: &str) -> Vec<String> {
-    if let Some(open) = s.find('{') {
-        let rest = &s[open + 1..];
-        if let Some(rel) = rest.find('}') {
-            let inner = &rest[..rel];
-            if inner.contains(',') && !inner.contains('{') {
-                let prefix = &s[..open];
-                let suffix = &rest[rel + 1..];
-                let mut out = Vec::new();
-                for part in inner.split(',') {
-                    for full in brace_expand(&format!("{prefix}{part}{suffix}")) {
-                        out.push(full);
-                        if out.len() >= 64 {
-                            return out;
-                        }
-                    }
+    // a real path is short; skip expansion for huge tokens so `{a,b}×N + 60KB` can't fan out
+    // into megabytes of string copies (the `{` in the returned literal still fails closed).
+    if s.len() > 4096 {
+        return vec![s.to_string()];
+    }
+    let mut budget = 0usize;
+    brace_expand_at(s, &mut budget)
+}
+
+fn brace_expand_at(s: &str, budget: &mut usize) -> Vec<String> {
+    let open = match s.find('{') {
+        Some(o) => o,
+        None => return vec![s.to_string()],
+    };
+    // matching close brace (balanced), so nested groups are handled
+    let mut depth = 0i32;
+    let mut close = None;
+    for (i, ch) in s[open..].char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    close = Some(open + i);
+                    break;
                 }
-                return out;
             }
+            _ => {}
         }
     }
-    vec![s.to_string()]
+    let close = match close {
+        Some(c) => c,
+        None => return vec![s.to_string()],
+    };
+    let inner = &s[open + 1..close];
+    let (prefix, suffix) = (&s[..open], &s[close + 1..]);
+    let parts = match expand_range(inner) {
+        Some(r) => r,
+        None if split_top_commas(inner).len() > 1 => split_top_commas(inner),
+        None => return vec![s.to_string()], // `{single}` isn't a brace expansion — keep literal
+    };
+    let mut out = Vec::new();
+    for part in parts {
+        for full in brace_expand_at(&format!("{prefix}{part}{suffix}"), budget) {
+            *budget += 1;
+            if *budget > 256 {
+                return vec![s.to_string()]; // fail closed: keep braces → asks
+            }
+            out.push(full);
+        }
+    }
+    out
+}
+
+/// Split on top-level commas, ignoring commas inside nested `{}`.
+fn split_top_commas(s: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut buf = String::new();
+    let mut depth = 0i32;
+    for c in s.chars() {
+        match c {
+            '{' => {
+                depth += 1;
+                buf.push(c);
+            }
+            '}' => {
+                depth -= 1;
+                buf.push(c);
+            }
+            ',' if depth == 0 => parts.push(std::mem::take(&mut buf)),
+            _ => buf.push(c),
+        }
+    }
+    parts.push(buf);
+    parts
+}
+
+/// Expand `{1..9}` / `{a..z}` ranges (bounded). None if not a range or too large.
+fn expand_range(inner: &str) -> Option<Vec<String>> {
+    let (a, b) = inner.split_once("..")?;
+    if b.contains("..") {
+        return None;
+    }
+    if let (Ok(x), Ok(y)) = (a.parse::<i64>(), b.parse::<i64>()) {
+        let (lo, hi) = (x.min(y), x.max(y));
+        if hi - lo > 256 {
+            return None;
+        }
+        return Some((lo..=hi).map(|n| n.to_string()).collect());
+    }
+    let (mut ca, mut cb) = (a.chars(), b.chars());
+    if let (Some(x), Some(y), None, None) =
+        (ca.next(), cb.next(), a.chars().nth(1), b.chars().nth(1))
+    {
+        if x.is_ascii_alphabetic() && y.is_ascii_alphabetic() {
+            let (lo, hi) = (x.min(y) as u8, x.max(y) as u8);
+            return Some((lo..=hi).map(|c| (c as char).to_string()).collect());
+        }
+    }
+    None
 }
 
 /// Remove backslash escapes outside single quotes (`r\m` → `rm`) so the DENY scan can't be
@@ -444,6 +581,34 @@ fn unescape_outside_squotes(s: &str) -> String {
             if let Some(n) = chars.next() {
                 out.push(n);
             }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Replace `$'...'` ANSI-C literals with their decoded text so the DENY scan sees the real
+/// command — `rm -rf $'\x2f'` normalizes to `rm -rf /`. (Reads decode via `tokenize`.)
+fn decode_dollar_quotes(s: &str) -> String {
+    let mut out = String::new();
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '$' && chars.peek() == Some(&'\'') {
+            chars.next();
+            let mut raw = String::new();
+            while let Some(c2) = chars.next() {
+                if c2 == '\'' {
+                    break;
+                }
+                raw.push(c2);
+                if c2 == '\\' {
+                    if let Some(n) = chars.next() {
+                        raw.push(n);
+                    }
+                }
+            }
+            out.push_str(&decode_ansi_c(&raw));
         } else {
             out.push(c);
         }
@@ -526,12 +691,18 @@ fn read_operands(s: &str, skip_pattern: bool) -> Vec<String> {
 }
 
 /// `< file` input-redirect targets (contents flow into the command as a read), brace-expanded.
+/// Skips a `<` inside quotes (`grep '<x' f`), but reads a real redirect's quoted target.
 fn input_redir_targets(seg: &str) -> Vec<String> {
-    let masked = mask_quoted(seg);
-    INPUT_REDIR
-        .captures_iter(&masked)
-        .flat_map(|c| brace_expand(c[1].trim_matches(['"', '\''])))
-        .collect()
+    let mut out = Vec::new();
+    for c in INPUT_REDIR.captures_iter(seg) {
+        let m = c.get(0).unwrap();
+        let op = m.start() + m.as_str().find('<').unwrap_or(0);
+        if inside_quote(seg, op) {
+            continue;
+        }
+        out.extend(brace_expand(c[1].trim_matches(['"', '\''])));
+    }
+    out
 }
 
 /// Strip transparent wrappers (`command`, `env`, `nohup`, `timeout N`, `nice -n N`, …) and
@@ -615,9 +786,15 @@ fn classify_segment(
     if SHELL_C.is_match(&s) {
         if depth < 3 {
             let toks = tokenize(&s);
+            // the flag group ending in `c` (`-c`, `-lc`, `-euxc`); script is the next token
             if let Some(script) = toks
                 .iter()
-                .position(|t| t == "-c")
+                .position(|t| {
+                    t.starts_with('-')
+                        && t.len() >= 2
+                        && t.ends_with('c')
+                        && t[1..].chars().all(|c| c.is_ascii_alphabetic())
+                })
                 .and_then(|i| toks.get(i + 1))
             {
                 let inner = decide_bash_at(
@@ -716,19 +893,19 @@ fn decide_bash_at(
         Some(c) => c,
         None => return Decision::Pass,
     };
-    // A real agent command is never hundreds of KB. Cap input so a pathological command
-    // (e.g. thousands of redirect targets, each hitting the filesystem via `resolve`) can't
-    // turn the hook into a latency sink — defer instead. Bounds every downstream loop at once.
-    if command.len() > 64 * 1024 {
+    // A real agent command is never tens of KB. Cap input so a pathological command (thousands
+    // of redirect/brace targets, each hitting the filesystem via `resolve`) can't turn the hook
+    // into a latency sink — defer instead. Bounds every downstream loop at once.
+    if command.len() > 16 * 1024 {
         return Decision::Pass;
     }
     let cmd = strip_comments(command);
     if cmd.is_empty() {
         return Decision::Pass;
     }
-    // Scan DENY over normalized variants so escaping (`r\m -rf /`) or braces (`rm {-rf,} /`)
-    // can't hide a catastrophic command. (Quoted `/` in `rm -rf "/"` is a known residual gap.)
-    if brace_expand(&unescape_outside_squotes(command))
+    // Scan DENY over normalized variants so escaping (`r\m -rf /`), ANSI-C quoting
+    // (`rm -rf $'\x2f'`), or braces (`rm {-rf,} /`) can't hide a catastrophic command.
+    if brace_expand(&unescape_outside_squotes(&decode_dollar_quotes(command)))
         .iter()
         .any(|v| DENY.iter().any(|r| r.is_match(v)))
     {
@@ -857,6 +1034,13 @@ mod tests {
             "r\\m -rf /",         // ...backslash-escaped command word (unescape before DENY)
             "rm -r\\f /",
             "rm {-rf,} /", // ...brace expansion
+            // round-4 panel: root spellings + ANSI-C-encoded slash + long opts + combined flag
+            "rm -rf //",
+            "rm -rf /.",
+            "rm -rf /../",
+            "rm -rf $'\\x2f'",
+            "rm --recursive --force /",
+            "bash -lc 'rm -rf /'",
         ] {
             assert_eq!(d(c, ROOT), Decision::Deny, "{c}");
         }
@@ -878,6 +1062,15 @@ mod tests {
             "cat ~/.ssh/id_*",        // glob operand overlapping a secret family
             "grep -f .env other.txt", // -f reads .env as a pattern file (not dropped as pattern)
             "cat .env>/tmp/steal",    // glued redirect, exfil outside repo
+            // round-4 panel dodges:
+            "echo x > '.env'",   // quoted redirect target (mask_quoted regression)
+            "cat < '.env'",      // quoted input-redirect target
+            "cat {x,{y,.env}}",  // nested brace expansion
+            "cat id_rs{a..a}",   // brace range → id_rsa
+            "cat .en{u..w}",     // brace range → .env
+            "cat $'\\u002eenv'", // ANSI-C unicode escape → ".env"
+            "cat $\".env\"",     // locale `$"..."` quoting
+            "bash -lc 'cat .env'", // combined shell flag `-lc`
         ] {
             assert_eq!(d(c, ROOT), Decision::Ask, "{c}");
         }
@@ -962,8 +1155,15 @@ mod tests {
         assert_eq!(brace_expand("{.env,x}"), vec![".env", "x"]);
         assert_eq!(brace_expand(".{env,}"), vec![".env", "."]);
         assert_eq!(brace_expand("plain"), vec!["plain"]);
+        assert_eq!(brace_expand("a{b,c}d"), vec!["abd", "acd"]);
+        assert_eq!(brace_expand("{x,{y,z}}"), vec!["x", "y", "z"]); // nested
+        assert_eq!(brace_expand("f{1..3}"), vec!["f1", "f2", "f3"]); // numeric range
+        assert_eq!(brace_expand("{a..c}"), vec!["a", "b", "c"]); // alpha range
+        assert_eq!(brace_expand("{}"), vec!["{}"]); // find placeholder — not an expansion
         assert_eq!(unescape_outside_squotes("r\\m -rf /"), "rm -rf /");
         assert_eq!(unescape_outside_squotes("echo '\\x'"), "echo '\\x'"); // single-quoted kept
+        assert_eq!(decode_dollar_quotes("rm $'\\x2f'"), "rm /");
+        assert_eq!(decode_ansi_c("\\u002eenv"), ".env"); // unicode escape
     }
 
     #[test]

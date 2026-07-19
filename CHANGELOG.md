@@ -22,17 +22,22 @@ the version — see [docs/RELEASING.md](docs/RELEASING.md).
   `find … -exec` dumpers, and `sh -c`/`bash -c '<script>'` (recursed into, depth-bounded — so
   `bash -c 'rm -rf /'` still denies even though the quote hid it from the top-level scan).
   A mini shell-lexer now unescapes the obfuscations a diff-reader reaches for first: backslash
-  escapes (`cat \.env`, `r\m -rf /`), ANSI-C quoting (`cat $'\056env'`), and brace expansion
-  (`cat {.env,x}`, `rm {-rf,} /`) — applied before both the read scan and the DENY scan. The
-  DENY scan is also un-dodgeable by escaping/braces. Redirect detection is quote-aware, so a
-  quoted `>` in a pattern (`grep '=>' f`, `grep -n 'if (x > 3)' src`) no longer misfires as a
-  write. fd-numbered input redirects (`cat 0< .env`) and `grep -f .env` are gated too.
-  This makes secret-read gating uniform across all three agents (Claude, Codex — which reads
-  *only* via the shell — and Antigravity). **Known residual gaps** (defer as `pass`, never a
-  silent `allow`): runtime `$VAR`/`$(…)` expansion, indirection through `eval`/`xargs`, and
-  arbitrary interpreters (`python -c`, `perl -e`) — static shell analysis can't resolve these
-  without executing; a quoted `/` in `rm -rf "/"` also isn't denied (word-boundary ambiguity).
-  A 64 KB command-length cap bounds worst-case parsing latency.
+  escapes (`cat \.env`, `r\m -rf /`), ANSI-C quoting including unicode (`cat $'\056env'`,
+  `cat $'.env'`), locale quoting (`cat $".env"`), and brace expansion with nesting and
+  ranges (`cat {x,{y,.env}}`, `cat id_rs{a..z}`) — applied before both the read scan and the
+  DENY scan; anything it can't fully expand fails closed to `ask`. Redirect detection is
+  quote-aware at the operator (so `grep '=>' f` isn't a write) yet still reads a real
+  redirect's quoted target (`echo x > '.env'` → ask; `cat < '.env'` → ask). The DENY scan is
+  un-dodgeable by escaping, ANSI-C-encoded slashes (`rm -rf $'\x2f'`), braces (`rm {-rf,} /`),
+  root spellings (`rm -rf //`, `/.`, `/../`), long options (`rm --recursive --force /`), and
+  combined shell flags (`bash -lc 'rm -rf /'`). fd-numbered input redirects (`cat 0< .env`)
+  and `grep -f .env` are gated too. This makes secret-read gating uniform across all three
+  agents (Claude, Codex — which reads *only* via the shell — and Antigravity). **Known residual
+  gaps** (defer as `pass`, never a silent `allow`): runtime `$VAR`/`$(…)` expansion, indirection
+  through `eval`/`xargs`, and arbitrary interpreters (`python -c`, `perl -e`) — static shell
+  analysis can't resolve these without executing; a quoted `/` in `rm -rf "/"` also isn't
+  denied (word-boundary ambiguity). A 16 KB command-length cap plus a 4 KB per-operand
+  brace-expansion guard bound worst-case parsing latency.
 - **Codex now surfaces `ask` at `PermissionRequest`** instead of dropping it to `{}`. Because
   Codex reads *only* via the shell and mediates confirmation at `PermissionRequest`, a dropped
   `ask` meant secret-read gating never reached the Codex user at all — the one agent this
