@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>keel · carryover — cross-agent session continuity</title>
+<style>
+  :root {
+    --bg:#1a1b26; --panel:#1f2335; --panel2:#24283b; --fg:#c0caf5; --muted:#565f89; --line:#2f344d;
+    --blue:#7aa2f7; --cyan:#7dcfff; --green:#9ece6a; --red:#f7768e; --orange:#ff9e64; --purple:#bb9af7; --yellow:#e0af68;
+    --mono:"D2Coding","MesloLGS NF",ui-monospace,"SF Mono",Menlo,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:radial-gradient(1200px 620px at 50% -10%,#1f2335 0%,var(--bg) 60%);
+       color:var(--fg);font-family:var(--sans);line-height:1.55;padding:46px 24px 90px;}
+  .wrap{max-width:1180px;margin:0 auto;}
+  .tag{font-family:var(--mono);font-size:12px;color:var(--cyan);}
+  h1{font-size:30px;margin:6px 0 2px;letter-spacing:-0.5px;}
+  .sub{font-size:15px;margin:0 0 2px;font-weight:600;}
+  header p{color:var(--muted);margin:2px 0;}
+  h2{font-size:14px;text-transform:uppercase;letter-spacing:1.6px;color:var(--muted);margin:46px 0 16px;font-weight:600;}
+  h2 .hint{text-transform:none;letter-spacing:0;color:var(--muted);font-weight:400;font-size:12px;}
+  h3{font-size:14.5px;margin:0 0 6px;}
+  p{margin:8px 0;}
+  code,.mono{font-family:var(--mono);}
+  code{color:var(--cyan);font-size:12.5px;}
+  .muted{color:var(--muted);}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px;}
+  .chip{font-family:var(--mono);font-size:11.5px;padding:4px 10px;border-radius:999px;border:1px solid var(--line);color:var(--muted);}
+  .chip b{color:var(--cyan);font-weight:600;}
+  .chip.on{border-color:var(--green);} .chip.on b{color:var(--green);}
+
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 18px;}
+  .card2{background:var(--panel2);border:1px solid var(--line);border-radius:11px;padding:13px 14px;}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;}
+  @media(max-width:820px){.grid2,.grid3{grid-template-columns:1fr;}}
+
+  /* callout */
+  .note{border-left:3px solid var(--cyan);background:var(--panel2);border-radius:0 10px 10px 0;padding:11px 14px;margin:14px 0;font-size:13.5px;}
+  .note.win{border-color:var(--green);}
+  .note.warn{border-color:var(--orange);}
+  .note b{color:var(--fg);}
+
+  /* tables */
+  table{width:100%;border-collapse:collapse;font-size:13px;margin:6px 0;}
+  th,td{text-align:left;padding:9px 11px;border-bottom:1px solid var(--line);vertical-align:top;}
+  th{font-size:11px;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);font-weight:600;}
+  td .mono{font-size:12px;}
+  .yes{color:var(--green);font-weight:600;} .no{color:var(--red);font-weight:600;} .part{color:var(--yellow);font-weight:600;}
+
+  /* lifecycle lanes */
+  .lanes{display:grid;grid-template-columns:1fr auto 1fr auto 1fr;align-items:stretch;gap:0;}
+  .lane{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:14px;}
+  .lane.cap{border-top:3px solid var(--purple);}
+  .lane.store{border-top:3px solid var(--cyan);}
+  .lane.inj{border-top:3px solid var(--green);}
+  .lane .lh{font-family:var(--mono);font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--muted);}
+  .lane .lt{font-size:14px;font-weight:600;margin:4px 0 8px;}
+  .lane ul{margin:0;padding-left:16px;font-size:12.5px;color:var(--muted);}
+  .lane li{margin:4px 0;}
+  .lane li b{color:var(--fg);font-weight:600;}
+  .barrow{align-self:center;color:var(--muted);font-family:var(--mono);font-size:18px;padding:0 8px;}
+  @media(max-width:820px){.lanes{grid-template-columns:1fr;}.barrow{transform:rotate(90deg);padding:6px 0;}}
+
+  /* steps */
+  .steps{display:flex;flex-wrap:wrap;gap:0;}
+  .step{flex:1 1 0;min-width:150px;background:var(--panel2);border:1px solid var(--line);border-radius:11px;padding:11px 12px;margin:4px;}
+  .step .n{font-family:var(--mono);font-size:10px;color:var(--cyan);}
+  .step .t{font-size:13px;font-weight:600;margin:3px 0;}
+  .step .d{font-size:11.5px;color:var(--muted);}
+  .step.key{border-color:var(--cyan);box-shadow:0 0 0 3px rgba(125,207,255,.06);}
+
+  /* tiers */
+  .tier{display:grid;grid-template-columns:54px 1fr 96px;gap:12px;align-items:center;border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin:8px 0;}
+  .tier .lv{font-family:var(--mono);font-weight:700;font-size:13px;text-align:center;border-radius:8px;padding:6px 0;}
+  .tier.t0 .lv{color:var(--green);background:rgba(158,206,106,.1);}
+  .tier.t1 .lv{color:var(--cyan);background:rgba(125,207,255,.1);}
+  .tier.t2 .lv{color:var(--yellow);background:rgba(224,175,104,.1);}
+  .tier.t3 .lv{color:var(--purple);background:rgba(187,154,247,.1);}
+  .tier .cost{font-family:var(--mono);font-size:11px;color:var(--muted);text-align:right;}
+  .tier .ship{color:var(--green);}
+
+  pre{background:#16161e;border:1px solid var(--line);border-radius:10px;padding:13px 15px;overflow:auto;
+      font-family:var(--mono);font-size:12px;color:var(--fg);line-height:1.5;margin:8px 0;}
+  pre .c{color:var(--muted);} pre .k{color:var(--purple);} pre .s{color:var(--green);} pre .v{color:var(--cyan);}
+
+  .legend{font-size:11.5px;color:var(--muted);font-family:var(--mono);margin-top:6px;}
+  footer{margin-top:54px;border-top:1px solid var(--line);padding-top:14px;color:var(--muted);font-size:12px;}
+  .ol{counter-reset:road;list-style:none;padding:0;margin:0;}
+  .ol li{counter-increment:road;position:relative;padding:9px 0 9px 40px;border-bottom:1px solid var(--line);font-size:13.5px;}
+  .ol li::before{content:"P"counter(road);position:absolute;left:0;top:8px;font-family:var(--mono);font-size:11px;color:var(--cyan);
+                 border:1px solid var(--line);border-radius:6px;padding:2px 6px;}
+  .ol li b{color:var(--fg);}
+  .pill{font-family:var(--mono);font-size:10.5px;padding:1px 7px;border-radius:999px;border:1px solid var(--line);color:var(--muted);margin-left:6px;}
+  .pill.now{color:var(--green);border-color:var(--green);}
+  .pill.next{color:var(--cyan);border-color:var(--cyan);}
+  .pill.later{color:var(--muted);}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="tag">keel · feature design · status: PROPOSAL</div>
+  <h1>carryover</h1>
+  <p class="sub">Cross-agent session hand-off, captured automatically — below the agent.</p>
+  <p>Switch from Claude Code to Codex to Antigravity mid-task and keep your working context. keel
+     captures the semantic spine of a session at the hook boundary, stores one tiny snapshot per
+     repo, and injects it into whichever agent you start next — no command to remember, no per-agent skill.</p>
+  <div class="chips">
+    <span class="chip">stages <b>UserPromptSubmit · Stop · PreCompact · SessionStart</b></span>
+    <span class="chip">store <b>~/.keel/carryover/&lt;root&gt;/</b></span>
+    <span class="chip on">opt-in <b>writes files</b></span>
+    <span class="chip">core LLM <b>none</b></span>
+    <span class="chip">model <b>one snapshot / repo</b></span>
+  </div>
+</header>
+
+<!-- ────────────────────────────── PROBLEM ────────────────────────────── -->
+<h2>1 · The problem <span class="hint">— live context is trapped per-vendor; every switch is a cold start</span></h2>
+<p>The goal, the decisions, the dead-ends you already ruled out, the four half-edited files — your <b>live
+   session state</b> lives inside whichever agent you happened to use. The moment you switch agents, it's gone.
+   And you switch more than you'd think — usually <b>involuntarily</b>:</p>
+<div class="grid3">
+  <div class="card2"><h3>Limits</h3><p class="muted">You hit a usage/rate cap at 70% through an auth refactor and <b>must</b> move to another agent to keep going. Unplanned — no chance to checkpoint.</p></div>
+  <div class="card2"><h3>Right tool</h3><p class="muted">You run Claude + Codex + Antigravity and pick per task. Each is a <b>silo</b> with its own memory and config.</p></div>
+  <div class="card2"><h3>Stuck</h3><p class="muted">One agent loops or wedges; you switch for <b>fresh eyes</b> — mid-task, with no clean stopping point.</p></div>
+</div>
+
+<p style="margin-top:16px;">Every switch then charges a <b>cold-start tax</b>:</p>
+<div class="grid3">
+  <div class="card2"><h3>① Re-brief</h3><p class="muted">You retype the goal, the constraints, the decisions, by hand. <span class="no">costs: your time</span></p></div>
+  <div class="card2"><h3>② Re-explore</h3><p class="muted">The new agent re-reads the same 50 files to rebuild state it can't see. <span class="no">costs: tokens + latency</span></p></div>
+  <div class="card2"><h3>③ Diverge</h3><p class="muted">Blind to history, it retries an approach you already rejected — or <b>undoes the previous agent's work</b>, silently. <span class="no">costs: correctness</span></p></div>
+</div>
+
+<div class="note warn">
+  <b>Why today's fixes don't close it.</b>
+  <code>CLAUDE.md</code> / <code>AGENTS.md</code> hold <i>static project facts</i> — not the live state of what you're doing right now — and they're per-vendor.
+  Manual hand-off (savepoint) captures live state, but <b>you have to remember to run it</b> — which fails exactly when the switch is involuntary — and it's a per-agent skill.
+  The gap is specific: <b>nothing captures live session state automatically, across vendors.</b>
+</div>
+
+<div class="card">
+  <h3>Why carryover, and why keel</h3>
+  <p>keel already sits <b>below every agent</b> as a hook shim — the one layer positioned to capture state <i>without being asked</i> and restore it into <i>any</i> agent. <b>carryover</b> is that: the automatic, cross-vendor version of the manual hand-off. The prior art's own verdict — <i>"hand-off is a habit, not a technology"</i> — names precisely what keel turns into infrastructure.</p>
+</div>
+
+<div class="note">
+  <b>Positioning.</b> carryover is the opposite of savepoint on every axis — and that gap <i>is</i> the product.
+  <table style="margin-top:8px;">
+    <tr><th>axis</th><th>savepoint / 4-layer</th><th>keel carryover</th></tr>
+    <tr><td>trigger</td><td class="no">manual — you must remember</td><td class="yes">automatic — hooks</td></tr>
+    <tr><td>author</td><td class="part">the agent (LLM writes it)</td><td class="yes">keel (structural; no core LLM)</td></tr>
+    <tr><td>layer</td><td>inside the agent (a skill)</td><td>below the agent (the shim)</td></tr>
+    <tr><td>cross-agent</td><td class="part">per-agent skill install</td><td class="yes">one binary, all agents</td></tr>
+  </table>
+</div>
+
+<!-- ────────────────────────────── ARCHITECTURE ────────────────────────────── -->
+<h2>2 · Where it sits <span class="hint">— capture is an adapter job; the store is the core</span></h2>
+<p>keel is ports-and-adapters. carryover adds nothing to that shape: the <b>core</b> wants a normalized
+   <code>{goal, state, result}</code>; each <b>adapter</b> sources those fields however its agent allows
+   (inline payload field vs. reading the transcript the hook points to). Variance lives at the edge, exactly
+   like the existing <code>parse</code>/<code>render</code> split.</p>
+
+<div class="lanes">
+  <div class="lane cap">
+    <div class="lh">capture · per agent</div>
+    <div class="lt">at the hook boundary</div>
+    <ul>
+      <li><b>UserPromptSubmit</b> → goal (prompt text)</li>
+      <li><b>Stop</b> → result (the answer)</li>
+      <li><b>PreCompact</b> → harvest the agent's own summary</li>
+      <li><b>PreToolUse</b> → mutation-only file filter</li>
+    </ul>
+  </div>
+  <div class="barrow">▶</div>
+  <div class="lane store">
+    <div class="lh">store · keel-owned</div>
+    <div class="lt">one snapshot / repo</div>
+    <ul>
+      <li><b>overwrite-in-place</b>, not a log</li>
+      <li>keyed by <b>repo root</b> (keel resolves it)</li>
+      <li><b>secret-scan</b> before write (reuse)</li>
+      <li>a few KB; nothing to prune</li>
+    </ul>
+  </div>
+  <div class="barrow">▶</div>
+  <div class="lane inj">
+    <div class="lh">inject · any agent</div>
+    <div class="lt">at SessionStart</div>
+    <ul>
+      <li>roll snapshot → digest</li>
+      <li><b>git-drift check</b> (disk state wins)</li>
+      <li>render via each agent's SessionStart</li>
+      <li>carry the <b>verification mandate</b></li>
+    </ul>
+  </div>
+</div>
+<p class="legend">No daemon. Each hook is fire-and-forget; the store is passive disk state — same posture as the existing audit-log feature. Fail-open and zero-dep are preserved.</p>
+
+<!-- ────────────────────────────── HOOK MATRIX ────────────────────────────── -->
+<h2>3 · What the hooks actually give us <span class="hint">— verified, per agent</span></h2>
+<div class="card">
+<table>
+  <tr><th>agent</th><th>hook events</th><th>user prompt</th><th>agent answer</th><th>compaction</th><th>config</th></tr>
+  <tr>
+    <td><b>Claude Code</b></td>
+    <td class="muted mono">30+ · UserPromptSubmit, Stop, PreCompact…</td>
+    <td class="yes">inline<br><span class="muted mono">UserPromptSubmit.prompt</span></td>
+    <td class="part">transcript<br><span class="muted mono">Stop → transcript_path</span></td>
+    <td class="yes">PreCompact</td>
+    <td class="mono muted">~/.claude</td>
+  </tr>
+  <tr>
+    <td><b>Codex</b></td>
+    <td class="muted mono">10 · UserPromptSubmit, Stop, PreCompact…</td>
+    <td class="yes">inline<br><span class="muted mono">UserPromptSubmit.prompt</span></td>
+    <td class="yes">inline<br><span class="muted mono">Stop.last_assistant_message</span></td>
+    <td class="yes">PreCompact</td>
+    <td class="mono muted">~/.codex/hooks.json</td>
+  </tr>
+  <tr>
+    <td><b>Antigravity (agy)</b></td>
+    <td class="muted mono">~5 · PreInvocation, Stop…</td>
+    <td class="no">transcript<br><span class="muted mono">read transcriptPath</span></td>
+    <td class="no">transcript<br><span class="muted mono">Stop → transcriptPath</span></td>
+    <td class="part">unconfirmed</td>
+    <td class="mono muted">~/.gemini/config/hooks.json</td>
+  </tr>
+</table>
+<p class="legend">Sources: Claude — code.claude.com/docs (verified). Codex — openai/codex generated schemas (high). Antigravity — Google DevRel secondary; docs render client-side (medium; field names version-sensitive). The Gemini CLI ≠ Antigravity agy.</p>
+</div>
+<div class="note win">
+  <b>The unlock.</b> keel needs <i>no LLM of its own</i> to match savepoint's quality. It <b>harvests the agents'
+  own summarization</b> at the boundary: <code>PreCompact</code> = the agent's focused <code>/compact</code> summary
+  (the "decisions / traps" content); <code>Stop</code> = the per-turn answer. Distilled context, captured automatically, zero added dependency.
+</div>
+
+<!-- ────────────────────────────── PROPER CONTEXT ────────────────────────────── -->
+<h2>4 · What counts as "proper" <span class="hint">— the schema is the filter</span></h2>
+<p>Don't log-then-summarize (that stores useless data by construction). <b>Capture schema-first:</b> write only the
+   fields the hand-off admits; never store the rest. "Proper" is decided at <b>write-time</b>, not read-time.</p>
+<div class="card">
+<table>
+  <tr><th>field</th><th>what it is</th><th>source</th><th>cost</th></tr>
+  <tr><td class="mono">goal</td><td>what we're trying to do</td><td>rolling last-K <b>user prompts</b> — stated intent, highest signal/byte</td><td class="yes">free</td></tr>
+  <tr><td class="mono">state.branch / cwd</td><td>where we are</td><td>structural</td><td class="yes">free</td></tr>
+  <tr><td class="mono">state.files</td><td>what's in flight</td><td><b>mutating tool calls only</b> — Write/Edit/MultiEdit, mutating Bash. <span class="no">drop Read/Grep/Glob</span></td><td class="yes">free</td></tr>
+  <tr><td class="mono">result / next</td><td>where we landed, what's next</td><td>the <b>answer at Stop</b>, latest only (inline Codex · transcript Claude/AG)</td><td class="part">~1 read/turn</td></tr>
+  <tr><td class="mono">decisions / traps</td><td>choices not to relitigate</td><td><b>PreCompact</b> harvest, or explicit marker / LLM (tiered)</td><td class="part">opt-in</td></tr>
+</table>
+</div>
+<div class="grid2" style="margin-top:14px;">
+  <div class="card2">
+    <h3>Salience gating</h3>
+    <p class="muted">Write the snapshot only on signals — everything else is mutation-filter only, no write.</p>
+    <div class="steps">
+      <div class="step key"><div class="n">on</div><div class="t">UserPromptSubmit</div><div class="d">refresh <code>goal</code></div></div>
+      <div class="step key"><div class="n">on</div><div class="t">Stop</div><div class="d">refresh <code>state · next</code></div></div>
+      <div class="step key"><div class="n">on</div><div class="t">PreCompact</div><div class="d">harvest <code>decisions</code></div></div>
+    </div>
+  </div>
+  <div class="card2">
+    <h3>The snapshot</h3>
+    <pre><span class="c">// ~/.keel/carryover/&lt;root-hash&gt;/snapshot.json — overwrite-in-place</span>
+{
+  <span class="k">"root"</span>: <span class="s">"/Users/alen/keel"</span>, <span class="k">"branch"</span>: <span class="s">"explore/…"</span>,
+  <span class="k">"goal"</span>: [<span class="s">"port oracle to rust"</span>, <span class="s">"add carryover"</span>],
+  <span class="k">"files"</span>: [<span class="s">"src/features/carryover.rs"</span>],
+  <span class="k">"result"</span>: <span class="s">"adapters wired; store TODO"</span>,
+  <span class="k">"decisions"</span>: <span class="s">"hexagonal; no core LLM"</span>,
+  <span class="k">"by"</span>: <span class="s">"claude"</span>, <span class="k">"updated"</span>: <span class="v">1750000000</span>
+}</pre>
+  </div>
+</div>
+
+<!-- ────────────────────────────── TIERS ────────────────────────────── -->
+<h2>5 · Quality tiers <span class="hint">— ship without an LLM</span></h2>
+<div class="tier t0"><div class="lv">T0</div><div><b>Structural</b> — branch, mutated files, cwd. Always on, fully deterministic.</div><div class="cost ship">free · ship</div></div>
+<div class="tier t1"><div class="lv">T1</div><div><b>Semantic-free</b> — last-K prompts + latest answer. <i>Already a usable hand-off.</i></div><div class="cost ship">free · ship</div></div>
+<div class="tier t2"><div class="lv">T2</div><div><b>Harvested / marked</b> — PreCompact summary, or explicit <code>keel checkpoint "decided X because Y"</code>. Proper-by-construction.</div><div class="cost">opt-in</div></div>
+<div class="tier t3"><div class="lv">T3</div><div><b>LLM distill</b> — best quality, but adds a dependency keel has never had.</div><div class="cost">off by default</div></div>
+<p class="muted" style="font-size:13px;">Ship <b>T0+T1</b>: prompts + mutated-files + last-answer reconstruct <i>what / changed / where-landed</i> with zero AI at a few KB per project. T2/T3 are upgrades, not prerequisites.</p>
+
+<!-- ────────────────────────────── INJECT ────────────────────────────── -->
+<h2>6 · Injection &amp; safety <span class="hint">— what keel does that the manual tools do by hand</span></h2>
+<div class="grid3">
+  <div class="card2"><h3>Verification mandate</h3><p class="muted">The injected digest is <b>hypotheses, not facts</b>. It carries an explicit directive: <i>re-read the files, validate against code, don't trust this.</i> Both prior-art tools insist on it.</p></div>
+  <div class="card2"><h3>Git-drift check <span class="pill now">free</span></h3><p class="muted">At SessionStart keel compares snapshot vs. live branch/HEAD/working-tree. <b>Disk state wins.</b> savepoint does this manually at <code>load</code>; keel does it automatically — it already resolves <code>root</code>.</p></div>
+  <div class="card2"><h3>Redaction <span class="pill now">reuse</span></h3><p class="muted">Run the existing <b>secret-scan</b> feature over anything carryover stores. keel is the policy layer; this is a one-line reuse, not new code.</p></div>
+</div>
+<div class="note warn"><b>Interop, not reinvention.</b> Emit the same <code>SAVEPOINT.md</code> / <code>SAVEPOINT_V1</code> marker savepoint already defines — so keel becomes the <i>automatic capture engine</i> feeding a format users can already load. Complementary, not competing.</div>
+
+<!-- ────────────────────────────── KEEL FIT ────────────────────────────── -->
+<h2>7 · Fit &amp; net-new work <span class="hint">— how much is actually new</span></h2>
+<div class="grid2">
+  <div class="card">
+    <h3>Reused as-is</h3>
+    <ul class="muted" style="font-size:13px;margin:0;padding-left:18px;">
+      <li><code>Feature</code> trait — carryover is one applet, like audit-log</li>
+      <li>audit-log's <i>how</i> — fail-open append, root-keyed, opt-in (drop its <i>what</i>)</li>
+      <li><code>runtime::find_root</code> — repo-root keying + git-drift</li>
+      <li><code>secret-scan</code> — redaction before store</li>
+      <li>engine aggregation / registry — observer returns <code>None</code></li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Net-new</h3>
+    <ul class="muted" style="font-size:13px;margin:0;padding-left:18px;">
+      <li>wire <code>UserPromptSubmit</code> + <code>Stop</code> + <code>PreCompact</code> into <code>agent.rs</code> STAGES</li>
+      <li>adapter <code>parse</code> for those payloads — inline vs transcript-read, per agent</li>
+      <li><code>carryover.rs</code> — snapshot capture + salience gating + mutation filter</li>
+      <li>SessionStart inject path — digest + drift check + verification preamble</li>
+      <li>optional <code>keel carryover</code> / <code>keel checkpoint</code> CLI verbs</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ────────────────────────────── ROADMAP ────────────────────────────── -->
+<h2>8 · Phasing</h2>
+<ol class="ol">
+  <li><b>Foundation</b> — wire the 3 capture stages + per-agent <code>parse</code> (Codex inline, Claude/AG transcript). Tests, behind opt-in flag. <span class="pill next">spike next</span></li>
+  <li><b>Store</b> — <code>carryover.rs</code>: T0+T1 snapshot, mutation filter, secret-scan, overwrite-in-place. <span class="pill later">then</span></li>
+  <li><b>Inject</b> — SessionStart digest + git-drift + verification mandate; <code>keel carryover</code>. <span class="pill later">then</span></li>
+  <li><b>Enrich</b> — T2 PreCompact harvest + <code>keel checkpoint</code>; SAVEPOINT interop. <span class="pill later">later</span></li>
+  <li><b>Optional</b> — T3 LLM distill (off by default); memory read-policy (durable, not just last-session). <span class="pill later">optional</span></li>
+</ol>
+
+<!-- ────────────────────────────── OPEN ────────────────────────────── -->
+<h2>9 · Open decisions</h2>
+<div class="grid3">
+  <div class="card2"><h3>Answer in the core?</h3><p class="muted">Include the agent's answer in the cross-agent core (Claude/AG need a transcript read), or keep core = prompts + state and treat answer as a Codex-cheap enricher?</p></div>
+  <div class="card2"><h3>Inject = auto or confirm?</h3><p class="muted">Auto-inject the digest at SessionStart, or stage it and let the user pull (<code>keel carryover load</code>)? Auto is seamless; confirm is safer.</p></div>
+  <div class="card2"><h3>Scope: hand-off vs memory?</h3><p class="muted">Ship last-session hand-off only, or design the store now for durable project memory (a later read-policy on the same snapshot)?</p></div>
+</div>
+
+<footer>
+  keel · carryover design proposal · branch <code>explore/mcp-and-context</code> · companion to
+  <code>docs/explore/mcp-and-context.md</code>. Tier-0/1 capture is fully deterministic and zero-dependency;
+  everything richer is opt-in and additive. Fail-open and the single-binary, zero-runtime-dep guarantees are preserved.
+</footer>
+
+</div>
+</body>
+</html>

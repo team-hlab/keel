@@ -5,6 +5,7 @@
 
 mod adapters;
 mod agent;
+mod carryover;
 mod consts;
 mod decision_log;
 mod engine;
@@ -72,6 +73,14 @@ fn cli(args: &[String]) -> i32 {
                 "{}",
                 decision_log::summarize(args.get(1).map(String::as_str))
             );
+            0
+        }
+        // dev: capture a real transcript into a carryover snapshot + digest
+        "carryover" => carryover::run_cli(&args[1..]),
+        // live hook entrypoint (called by an agent's Stop / SessionStart / … hooks)
+        "carryover-hook" if args.len() >= 3 => {
+            let (platform, stage) = (args[1].clone(), args[2].clone());
+            let _ = catch_unwind(move || carryover::run_hook(&platform, &stage));
             0
         }
         "init" => shim::init(),
