@@ -21,9 +21,11 @@ static ENV_PREFIX: LazyLock<Regex> =
 static SINGLE_QUOTED: LazyLock<Regex> = LazyLock::new(|| rx(r"'[^']*'"));
 static EXPANSION: LazyLock<Regex> = LazyLock::new(|| rx(r"\$[A-Za-z_{(]"));
 static FILE_WRITE: LazyLock<Regex> =
-    LazyLock::new(|| rx(r"^(mkdir|cp|mv|rm|touch|chmod|ln|rsync|tee)\b"));
+    LazyLock::new(|| rx(r"^(mkdir|cp|mv|rm|touch|chmod|ln|rsync|tee|install)\b"));
 // Copy commands read their source operand(s): `cp .env /tmp/x` exfiltrates a secret.
-static COPY_CMD: LazyLock<Regex> = LazyLock::new(|| rx(r"^(cp|mv|rsync)\b"));
+static COPY_CMD: LazyLock<Regex> = LazyLock::new(|| rx(r"^(cp|mv|rsync|install)\b"));
+// A copy with an explicit target flag — then ALL positional operands are sources.
+static COPY_TARGET_FLAG: LazyLock<Regex> = LazyLock::new(|| rx(r"(^|\s)(-t\s|--target-directory)"));
 static GIT_WRITE: LazyLock<Regex> = LazyLock::new(|| {
     rx(
         r"^git\s+(-C\s+\S+\s+)?(add|commit|push|checkout|switch|stash|merge|rebase|cherry-pick|restore|tag)\b",
@@ -719,23 +721,34 @@ fn strip_prefixes(seg: &str) -> String {
 }
 
 /// Is a token a root-equivalent target: `/`, `//`, `/.`, `/../`, `/*`, `~`, `~/`, `$HOME`?
-fn is_root_target(t: &str) -> bool {
-    matches!(t, "/" | "~" | "~/" | "$HOME" | "/*")
-        || (t.starts_with('/') && t.chars().all(|c| c == '/' || c == '.'))
+fn base_cmd(t: &str) -> &str {
+    t.rsplit('/').next().unwrap_or(t)
 }
 
-/// Command-aware catastrophic `rm`: the *first* token is `rm`, with a recursive flag and a
-/// root-equivalent operand. `tokenize` has already unescaped/decoded/dequoted, so this catches
-/// `rm -rf "/"`, `rm -rf $'\x2f'`, `r\m -rf /` — and does NOT fire on `echo "rm -rf /"` (echo is
-/// the command, not rm), which the raw-string DENY regex false-denies.
+fn is_root_target(t: &str) -> bool {
+    // `/`, `//`, `/.`, `/../`, `/*` (glob → top-level entries), and any mix of `/` and `.`
+    if t == "/*" || (t.starts_with('/') && t.chars().all(|c| c == '/' || c == '.')) {
+        return true;
+    }
+    // `~`, `$HOME`, `${HOME}` — with optional trailing slashes/dots (`$HOME/`, `~/`, `$HOME/.`)
+    matches!(t.trim_end_matches(['/', '.']), "~" | "$HOME" | "${HOME}")
+}
+
+/// Command-aware catastrophic `rm`: the command word is `rm` (basename, so `/bin/rm`, `./rm`,
+/// `busybox rm` all count), with a recursive flag and a root-equivalent operand. `tokenize` has
+/// unescaped/decoded/dequoted and we brace-expand, so `rm -rf "/"`, `rm -rf $'\x2f'`, `r\m -rf /`,
+/// `rm {-rf,} /` all match — and it does NOT fire on `echo "rm -rf /"` (echo is the command).
 fn catastrophic_rm(s: &str) -> bool {
     let toks: Vec<String> = tokenize(s).iter().flat_map(|t| brace_expand(t)).collect();
-    if toks.first().map(String::as_str) != Some("rm") {
-        return false;
-    }
+    // command word: skip a busybox/toybox multicall prefix
+    let start = match toks.first().map(|t| base_cmd(t)) {
+        Some("rm") => 1,
+        Some("busybox" | "toybox") if toks.get(1).map(|t| base_cmd(t)) == Some("rm") => 2,
+        _ => return false,
+    };
     let mut recursive = false;
     let mut root = false;
-    for t in &toks[1..] {
+    for t in &toks[start..] {
         if t == "--recursive" {
             recursive = true;
         } else if t.starts_with("--") {
@@ -749,6 +762,36 @@ fn catastrophic_rm(s: &str) -> bool {
         }
     }
     recursive && root
+}
+
+/// Whole-command scan for a catastrophic `rm`, at every simple-command boundary. Splits on
+/// separators AND paren boundaries (quote-aware) so `true && ( rm -rf / )`, `( a; rm -rf / )`,
+/// and `x | rm -rf /` are all caught — the per-segment classifier misses paren groups because it
+/// bails on `(` before seeing the inner `rm`. Quote-awareness keeps `echo "rm -rf /"` safe.
+fn scan_catastrophic_rm(cmd: &str) -> bool {
+    let mut pieces = vec![String::new()];
+    let mut q: Option<char> = None;
+    for c in cmd.chars() {
+        match q {
+            Some(qc) => {
+                pieces.last_mut().unwrap().push(c);
+                if c == qc {
+                    q = None;
+                }
+            }
+            None => match c {
+                '\'' | '"' => {
+                    q = Some(c);
+                    pieces.last_mut().unwrap().push(c);
+                }
+                ';' | '&' | '|' | '(' | ')' | '\n' => pieces.push(String::new()),
+                _ => pieces.last_mut().unwrap().push(c),
+            },
+        }
+    }
+    pieces
+        .iter()
+        .any(|p| catastrophic_rm(&strip_prefixes(p.trim())))
 }
 
 fn classify_write(
@@ -785,13 +828,7 @@ fn classify_segment(
     protected: Decision,
     depth: u8,
 ) -> Decision {
-    // catastrophic `rm` of root — checked first (before the `$`/paren bail-outs) so
-    // `rm -rf $HOME` / `rm -rf "/"` still deny. Command-aware, so `echo "rm -rf /"` doesn't.
-    let s = strip_prefixes(seg);
-    if catastrophic_rm(&s) {
-        return Decision::Deny;
-    }
-    // DENY is enforced on the whole command in decide_bash, so it can't reach here.
+    // Catastrophic `rm` (incl. paren groups) is denied whole-command in decide_bash_at.
     if has_expansion(seg) {
         return Decision::Pass;
     }
@@ -818,6 +855,7 @@ fn classify_segment(
         }
     }
 
+    let s = strip_prefixes(seg);
     // `sh -c '<script>'` re-parses and runs the script → recurse into it (depth-bounded) so it's
     // gated, not deferred. `$`/backtick scripts already bailed to Pass via has_expansion above.
     if SHELL_C.is_match(&s) {
@@ -862,10 +900,18 @@ fn classify_segment(
                 .filter(|t| !t.starts_with('-'))
                 .flat_map(|t| brace_expand(&t))
                 .collect();
-            if ops.len() >= 2
-                && ops[..ops.len() - 1]
-                    .iter()
-                    .any(|t| is_sensitive_operand(t, patterns, witnesses))
+            // with `-t DIR`/`--target-directory` the dest is the flag value, so every operand is
+            // a source; otherwise the last operand is the dest and the rest are sources.
+            let sources = if COPY_TARGET_FLAG.is_match(&s) {
+                &ops[..]
+            } else if ops.len() >= 2 {
+                &ops[..ops.len() - 1]
+            } else {
+                &ops[..0]
+            };
+            if sources
+                .iter()
+                .any(|t| is_sensitive_operand(t, patterns, witnesses))
             {
                 worst = worsen(worst, Decision::Ask);
             }
@@ -956,6 +1002,11 @@ fn decide_bash_at(
     let cmd = strip_comments(command);
     if cmd.is_empty() {
         return Decision::Pass;
+    }
+    // Catastrophic `rm` of root at any command position (chains, pipes, paren groups) — checked
+    // whole-command so it's robust to segmentation and paren-group bail-outs.
+    if scan_catastrophic_rm(command) {
+        return Decision::Deny;
     }
     // Scan DENY over normalized variants so escaping (`r\m -rf /`), ANSI-C quoting
     // (`rm -rf $'\x2f'`), or braces (`rm {-rf,} /`) can't hide a catastrophic command.
@@ -1099,6 +1150,16 @@ mod tests {
             "rm -rf '/'",
             "rm -rf $HOME",
             "rm -r ~",
+            // round-5 panel regressions: path-qualified rm, paren groups, $HOME variants
+            "/bin/rm -rf /",
+            "/usr/bin/rm -rf /",
+            "busybox rm -rf /",
+            "./rm -rf /",
+            "true && ( rm -rf / )",
+            "echo hi; ( rm -rf ~ )",
+            "x || ( rm -rf / )",
+            "rm -rf $HOME/",
+            "rm -rf ${HOME}",
         ] {
             assert_eq!(d(c, ROOT), Decision::Deny, "{c}");
         }
@@ -1142,6 +1203,9 @@ mod tests {
             "cp .env /tmp/x", // copy source is a read (exfil)
             "mv id_rsa /tmp/",
             "rsync credentials.json remote:",
+            "install -m600 id_rsa /tmp/x", // install copies its source
+            "cp -t /tmp .env",             // -t: dest is the flag, .env is a source
+            "cp -t /tmp README.md .env x", // ...even mid-list
         ] {
             assert_eq!(d(c, ROOT), Decision::Ask, "{c}");
         }
