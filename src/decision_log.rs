@@ -111,6 +111,24 @@ fn top(map: &BTreeMap<String, u64>, n: usize) -> Vec<(&String, u64)> {
     v
 }
 
+/// Key a record for the "top targets" tallies: exec by its command word, files by path, and a
+/// resource-less tool (op:other, e.g. WebFetch/Task) by its tool name.
+fn record_key(v: &Value) -> String {
+    let res = v
+        .get("resource")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty());
+    match (v.get("op").and_then(Value::as_str), res) {
+        (Some("exec"), Some(r)) => r.split_whitespace().next().unwrap_or(r).to_string(),
+        (_, Some(r)) => r.to_string(),
+        _ => v
+            .get("tool")
+            .and_then(Value::as_str)
+            .unwrap_or("?")
+            .to_string(),
+    }
+}
+
 /// Summarize the decision log for `keel stats`: verdict mix + what's driving `ask`
 /// (the curation candidates for the allow-set).
 pub fn summarize(path_arg: Option<&str>) -> String {
@@ -129,6 +147,11 @@ pub fn summarize(path_arg: Option<&str>) -> String {
     let mut verdicts: BTreeMap<String, u64> = BTreeMap::new();
     let mut ask_reasons: BTreeMap<String, u64> = BTreeMap::new();
     let mut ask_targets: BTreeMap<String, u64> = BTreeMap::new();
+    // autopermit's "bypasses": where it deferred (`pass`) or where nothing gates the tool at all
+    // (`op:other` — WebFetch/Task/MCP). These are the upgrade candidates: teach autopermit to gate
+    // the deferred commands, and the adapters to map the ungated tools.
+    let mut pass_targets: BTreeMap<String, u64> = BTreeMap::new();
+    let mut other_tools: BTreeMap<String, u64> = BTreeMap::new();
     for line in text.lines() {
         let v: Value = match serde_json::from_str(line) {
             Ok(v) => v,
@@ -136,6 +159,7 @@ pub fn summarize(path_arg: Option<&str>) -> String {
         };
         total += 1;
         let verdict = v.get("verdict").and_then(Value::as_str).unwrap_or("?");
+        let op = v.get("op").and_then(Value::as_str).unwrap_or("other");
         *verdicts.entry(verdict.to_string()).or_default() += 1;
         if verdict == "ask" {
             if let Some(r) = v
@@ -145,15 +169,12 @@ pub fn summarize(path_arg: Option<&str>) -> String {
             {
                 *ask_reasons.entry(r.to_string()).or_default() += 1;
             }
-            if let Some(r) = v.get("resource").and_then(Value::as_str) {
-                // key exec by its command word, files by their path
-                let key = if v.get("op").and_then(Value::as_str) == Some("exec") {
-                    r.split_whitespace().next().unwrap_or(r).to_string()
-                } else {
-                    r.to_string()
-                };
-                *ask_targets.entry(key).or_default() += 1;
-            }
+            *ask_targets.entry(record_key(&v)).or_default() += 1;
+        }
+        if op == "other" {
+            *other_tools.entry(record_key(&v)).or_default() += 1;
+        } else if verdict == "pass" {
+            *pass_targets.entry(record_key(&v)).or_default() += 1;
         }
     }
 
@@ -177,5 +198,52 @@ pub fn summarize(path_arg: Option<&str>) -> String {
             out.push_str(&format!("    {c:>5}  {r}\n"));
         }
     }
+    // The bypass view: what autopermit doesn't decide today → what to teach it next.
+    if !pass_targets.is_empty() {
+        out.push_str(
+            "\n  top bypass targets (pass — autopermit deferred; gating-upgrade candidates):\n",
+        );
+        for (r, c) in top(&pass_targets, 15) {
+            out.push_str(&format!("    {c:>5}  {r}\n"));
+        }
+    }
+    if !other_tools.is_empty() {
+        out.push_str(
+            "\n  ungated tools (op:other — no policy applies; adapter/mapping candidates):\n",
+        );
+        for (r, c) in top(&other_tools, 15) {
+            out.push_str(&format!("    {c:>5}  {r}\n"));
+        }
+    }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn summarize_surfaces_bypasses_and_asks() {
+        let path = std::env::temp_dir().join(format!("keel-stats-{}.jsonl", std::process::id()));
+        let mut f = fs::File::create(&path).unwrap();
+        for line in [
+            r#"{"op":"exec","tool":"Bash","resource":"npm test","verdict":"pass","reason":""}"#,
+            r#"{"op":"exec","tool":"Bash","resource":"npm run build","verdict":"pass","reason":""}"#,
+            r#"{"op":"other","tool":"WebFetch","resource":null,"verdict":"pass","reason":""}"#,
+            r#"{"op":"read","tool":"Read","resource":"x/.env","verdict":"ask","reason":"secret"}"#,
+        ] {
+            writeln!(f, "{line}").unwrap();
+        }
+        let out = summarize(Some(path.to_str().unwrap()));
+        // bypass view: deferred exec keyed by command word + ungated tool by name
+        assert!(out.contains("bypass targets"), "{out}");
+        assert!(out.contains("npm"), "{out}"); // both npm* rows collapse to the command word
+        assert!(
+            out.contains("ungated tools") && out.contains("WebFetch"),
+            "{out}"
+        );
+        // ask side still present
+        assert!(out.contains("allow-set candidates"), "{out}");
+        fs::remove_file(&path).ok();
+    }
 }
