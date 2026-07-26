@@ -6,19 +6,37 @@ the version — see [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [Unreleased]
 
-### Fixed
-- **Antigravity content-read tools are now gated.** `view_file` / `search_in_file` /
-  `view_file_outline` (via `args.AbsolutePath`) and `view_code_item` (via `args.File`) are
-  normalized to `Read` and added to the hook matcher, so read gating (secret files → ask)
-  applies on Antigravity — previously they were unrecognized (`op:"other"`) and passed
-  ungated. (Codex reads go through the shell; Claude reads are native — both already covered.)
+## [0.1.5] — 2026-07-26
 
 ### Added
+- **carryover — automatic cross-agent session hand-off.** Opt-in per project (`.keel.json` →
+  `features.carryover.enabled`). Captures a session's goal (prompts) + mutated files + last
+  answer and injects it into whichever agent starts next, so switching Claude ⇄ Codex ⇄
+  Antigravity mid-task keeps context. Secrets redacted before store, a 7-day freshness
+  window, and a git-drift "disk state wins" note in the digest. Installed by `keel init`,
+  inert until a project opts in.
+- **`keel update [--check]`** — compares the running version to the latest GitHub release;
+  for Homebrew installs delegates to `brew upgrade`, else prints the download URL. Zero new
+  deps (shells out to the system `curl`).
+- **`keel init` now adds the shim dir to your shell PATH** — writes a marked block to
+  `~/.zshrc` / `~/.bashrc` (stripped cleanly by `keel uninstall`), so the shims take effect
+  without a manual PATH edit.
 - **Decision log** — opt-in (`"log": {"enabled": true, "path": "~/.keel/decisions.jsonl",
   "maxSizeMb": 5}`) run-level JSONL of every hook call's final verdict (op · resource ·
   verdict · reason · source), with size-roll retention. `keel stats [logfile]` summarizes the
   verdict mix + what's driving `ask`. Zero cost when off; the append is negligible next to
   the per-call process spawn (verified).
+
+### Fixed
+- **Linux binary is now a static musl build** (`x86_64-unknown-linux-musl`) — no glibc
+  dependency, runs on any distro. The old `-gnu` build linked the CI runner's glibc and
+  broke (`GLIBC_2.39 not found`) when `ubuntu-latest` bumped to 24.04; musl also finally
+  makes the "single static binary, zero runtime dependencies" claim true.
+- **Antigravity content-read tools are now gated.** `view_file` / `search_in_file` /
+  `view_file_outline` (via `args.AbsolutePath`) and `view_code_item` (via `args.File`) are
+  normalized to `Read` and added to the hook matcher, so read gating (secret files → ask)
+  applies on Antigravity — previously they were unrecognized (`op:"other"`) and passed
+  ungated. (Codex reads go through the shell; Claude reads are native — both already covered.)
 
 ### Removed
 - The `audit-log` feature — superseded by the decision log (which records the *verdict*, not
