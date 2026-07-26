@@ -21,7 +21,7 @@ class Keel < Formula
 
   on_linux do
     on_intel do
-      url "https://github.com/team-hlab/keel/releases/download/v0.0.0/keel-x86_64-unknown-linux-gnu.tar.gz"
+      url "https://github.com/team-hlab/keel/releases/download/v0.0.0/keel-x86_64-unknown-linux-musl.tar.gz"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000"
     end
   end

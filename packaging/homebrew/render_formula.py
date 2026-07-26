@@ -18,7 +18,8 @@ REPO = "team-hlab/keel"
 TARGETS = {
     "arm_macos": "aarch64-apple-darwin",
     "intel_macos": "x86_64-apple-darwin",
-    "intel_linux": "x86_64-unknown-linux-gnu",
+    # static musl build — the release artifact is keel-x86_64-unknown-linux-musl.tar.gz
+    "intel_linux": "x86_64-unknown-linux-musl",
 }
 
 
