@@ -17,6 +17,14 @@ pub const GIT_DIR: &str = ".git";
 /// clean `uninstall` (only keel-tagged entries are removed).
 pub const KEEL_MARKER: &str = "__keel";
 
+/// GitHub repo slug (releases API + `brew upgrade <slug>/keel`).
+pub const REPO: &str = "team-hlab/keel";
+
+/// Markers wrapping the PATH block `keel init` writes to the shell rc, so `uninstall` can
+/// remove exactly what keel added (and `init` stays idempotent).
+pub const PATH_BLOCK_BEGIN: &str = "# >>> keel (shim PATH) >>>";
+pub const PATH_BLOCK_END: &str = "# <<< keel (shim PATH) <<<";
+
 /// Environment overrides.
 pub const ENV_HOME: &str = "KEEL_HOME"; // override $HOME for install/shim paths
 pub const ENV_ROOT: &str = "KEEL_ROOT"; // force the project root
