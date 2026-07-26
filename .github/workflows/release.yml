@@ -47,7 +47,10 @@ jobs:
         include:
           - { os: macos-latest, target: aarch64-apple-darwin }
           - { os: macos-latest, target: x86_64-apple-darwin }
-          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
+          # musl → a fully static Linux binary with no glibc floor (runs on any distro),
+          # matching keel's "single static binary" promise. gnu linked against the runner's
+          # glibc, which broke on older systems when ubuntu-latest bumped to 2.39.
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -55,6 +58,8 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
+      - if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
       - run: cargo build --release --target ${{ matrix.target }}
       - run: tar -C target/${{ matrix.target }}/release -czf keel-${{ matrix.target }}.tar.gz keel
       - uses: actions/upload-artifact@v4

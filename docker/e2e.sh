@@ -16,8 +16,11 @@ timeout 30 agy    --version >/dev/null 2>&1 || fail "agy --version"
 ok "claude + codex + agy installed"
 
 echo "== keel features =="
+# capture once — piping `keel … | grep -q` closes the pipe early, and under `pipefail`
+# keel's broken-pipe exit fails the check (timing-dependent; musl exposed it).
+feats="$(keel features)"
 for f in autopermit branch-guard secret-scan session-banner; do
-  keel features | grep -qx "$f" || fail "feature missing: $f"
+  grep -qx "$f" <<<"$feats" || fail "feature missing: $f"
 done
 ok "keel features lists all 5"
 
@@ -36,8 +39,9 @@ grep -q "__keel"                          "$HOME/.claude/settings.json"      || 
 ok "hooks applied + tagged (claude/codex/antigravity)"
 
 echo "== keel doctor =="
-keel doctor
-keel doctor | grep -q "claude" || fail "doctor missing claude"
+doctor_out="$(keel doctor)"
+echo "$doctor_out"
+grep -q "claude" <<<"$doctor_out" || fail "doctor missing claude"
 
 echo "== per-agent hook verdicts =="
 proj=/work
