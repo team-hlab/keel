@@ -14,6 +14,7 @@ const STAGES: &[&str] = &["PreToolUse", "PermissionRequest"];
 
 pub struct AutoPermit {
     patterns: Vec<Regex>,
+    witnesses: Vec<String>, // concrete filenames the sensitive globs match (for glob operands)
     regexes: Vec<Regex>,
     protected: Decision, // verdict for an in-repo write outside the worktree areas
 }
@@ -36,6 +37,7 @@ impl AutoPermit {
                     .collect()
             });
         let patterns = pats.iter().map(|g| policy::glob_to_regex(g)).collect();
+        let witnesses = pats.iter().map(|g| policy::glob_witness(g)).collect();
         let worktrees = config
             .get("worktrees")
             .and_then(Value::as_str)
@@ -58,6 +60,7 @@ impl AutoPermit {
         };
         AutoPermit {
             patterns,
+            witnesses,
             regexes: policy::write_allow_regexes(worktrees, projects),
             protected,
         }
@@ -105,6 +108,7 @@ impl Feature for AutoPermit {
                 event.cwd.as_deref(),
                 &event.root,
                 &self.patterns,
+                &self.witnesses,
                 &self.regexes,
                 &resolve,
                 self.protected,

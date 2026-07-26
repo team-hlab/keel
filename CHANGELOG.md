@@ -7,6 +7,48 @@ the version — see [docs/RELEASING.md](docs/RELEASING.md).
 ## [Unreleased]
 
 ### Fixed
+- **Shell content-reads of secrets now ask, closing the `Read`-tool bypass.** An agent
+  blocked from `Read .env` could previously just run `cat .env` — content-dumping commands
+  (`cat`, `head`, `tail`, `less`, `nl`, `tac`, `xxd`, `od`, `base64`, `strings`, `grep`,
+  `rg`, `awk`, `sed`, `cut`, …) were treated as unconditionally safe. **Every** file operand
+  is now checked for sensitivity: sensitive → **ask**, non-secret (or stdin/pattern-only) →
+  **allow**. Metadata-only commands (`ls`, `stat`, `file`) don't reveal contents and stay
+  allow. The check is quote-aware and resists the obvious dodges: multiple operands
+  (`cat a .env`), trailing redirects (`cat .env 2>/dev/null`), input redirects
+  (`cat <.env`, `< .env cat`), quoted-paren patterns (`grep -E '(A|B)' .env`), transparent
+  wrappers (`command`/`builtin`/`exec`/`env`/`nohup`/`timeout`/`nice cat .env`), glob operands
+  that expand onto secrets (`cat ~/.ssh/id_*`, `cat .en?` — ordinary globs like `cat *.log`
+  and a bare `cat *` stay allow, no fatigue), filenames glued to a redirect (`cat .env>x`),
+  `find … -exec` dumpers, and `sh -c`/`bash -c '<script>'` (recursed into, depth-bounded — so
+  `bash -c 'rm -rf /'` still denies even though the quote hid it from the top-level scan).
+  A mini shell-lexer now unescapes the obfuscations a diff-reader reaches for first: backslash
+  escapes (`cat \.env`, `r\m -rf /`), ANSI-C quoting including unicode (`cat $'\056env'`,
+  `cat $'.env'`), locale quoting (`cat $".env"`), and brace expansion with nesting and
+  ranges (`cat {x,{y,.env}}`, `cat id_rs{a..z}`) — applied before both the read scan and the
+  DENY scan; anything it can't fully expand fails closed to `ask`. Redirect detection is
+  quote-aware at the operator (so `grep '=>' f` isn't a write) yet still reads a real
+  redirect's quoted target (`echo x > '.env'` → ask; `cat < '.env'` → ask). The DENY scan is
+  un-dodgeable by escaping, ANSI-C-encoded slashes (`rm -rf $'\x2f'`), braces (`rm {-rf,} /`),
+  root spellings (`rm -rf //`, `/.`, `/../`), long options (`rm --recursive --force /`), and
+  combined shell flags (`bash -lc 'rm -rf /'`). fd-numbered input redirects (`cat 0< .env`)
+  and `grep -f .env` are gated too. This makes secret-read gating uniform across all three
+  agents (Claude, Codex — which reads *only* via the shell — and Antigravity). **Known residual
+  gaps** (defer as `pass`, never a silent `allow`): runtime `$VAR`/`$(…)` expansion, indirection
+  through `eval`/`xargs`, and arbitrary interpreters (`python -c`, `perl -e`) — static shell
+  analysis can't resolve these without executing; a quoted `/` in `rm -rf "/"` also isn't
+  denied (word-boundary ambiguity). A 16 KB command-length cap plus a 4 KB per-operand
+  brace-expansion guard bound worst-case parsing latency.
+- **Codex now surfaces `ask` at `PermissionRequest`** instead of dropping it to `{}`. Because
+  Codex reads *only* via the shell and mediates confirmation at `PermissionRequest`, a dropped
+  `ask` meant secret-read gating never reached the Codex user at all — the one agent this
+  feature is most for. (The `PermissionRequest` decision schema remains best-effort.)
+- **Expanded the default sensitive-file set** beyond `.env`/`*.key`/`*.pem`/`credentials*`/
+  `*secret*` to cover SSH/PGP keys (`id_rsa*`, `id_ed25519*`, `id_ecdsa*`, `id_dsa*`,
+  `*.ppk`), keystores/vaults (`*.p12`, `*.pfx`, `*.keystore`, `*.jks`, `*.kdbx`), and
+  credential/cluster/VPN configs (`.npmrc`, `.netrc`, `.pgpass`, `.htpasswd`, `kubeconfig`,
+  `*.ovpn`). Distinctive basenames also cover the common `cat ~/.ssh/id_rsa` /
+  `cat ~/.aws/credentials` exfil paths. (Setting `sensitiveFilePatterns` still replaces the
+  set wholesale.)
 - **Antigravity content-read tools are now gated.** `view_file` / `search_in_file` /
   `view_file_outline` (via `args.AbsolutePath`) and `view_code_item` (via `args.File`) are
   normalized to `Read` and added to the hook matcher, so read gating (secret files → ask)

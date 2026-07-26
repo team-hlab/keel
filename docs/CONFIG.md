@@ -5,14 +5,14 @@ otherwise built-in defaults. `<root>` is `$KEEL_ROOT` or the nearest `.git` ance
 tool call's `cwd`. **Everything is optional** — keel works with no config file, and any
 missing key falls back to its default.
 
-## Shape (all values shown are the defaults)
+## Shape (values shown are the defaults — see the table below for the full lists)
 
 ```json
 {
   "features": {
     "autopermit": {
       "enabled": true,
-      "sensitiveFilePatterns": [".env*", "*.key", "*.pem", "credentials*", "*secret*"],
+      "sensitiveFilePatterns": [".env*", "*.key", "*.pem", "credentials*", "*secret*", "id_rsa*", "…"],
       "worktrees": "worktrees",
       "projects": "projects"
     },
@@ -44,12 +44,12 @@ Every feature accepts **`enabled`** (bool); all default **on**.
 ### `autopermit`
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `sensitiveFilePatterns` | string[] | `[".env*","*.key","*.pem","credentials*","*secret*"]` | Basename globs (`*`, `?`, case-insensitive). A read/write whose **filename** matches → **ask**. |
+| `sensitiveFilePatterns` | string[] | env/keys/creds set (`.env*`, `*.key`, `*.pem`, `credentials*`, `*secret*`, `id_rsa*`, `id_ed25519*`, `.npmrc`, `.netrc`, `.pgpass`, `*.p12`, `*.pfx`, `*.keystore`, `*.kdbx`, `kubeconfig`, `*.ovpn`, …) | Basename globs (`*`, `?`, case-insensitive). A read/write whose **filename** matches → **ask**. Applies to file tools **and** shell content-reads (`cat`/`head`/`grep`/`base64`/…), so `cat ~/.ssh/id_rsa` asks just like the Read tool would. Setting this **replaces** the default set. |
 | `worktrees` | string | `"worktrees"` | Path-segment name treated as a safe write area — writes under `<root>/worktrees/…` → **allow**. |
 | `projects` | string | `"projects"` | Enables nested layouts: writes under `<root>/projects/*/worktrees/…` (one or two levels) are also allowed. |
 | `protectedWrites` | `"ask"` \| `"deny"` \| `"pass"` \| `"allow"` | `"ask"` | What to do with an in-repo write **outside** the worktree areas. `"ask"` (default) confirms — great interactively, but **blocks headless/autonomous runs** (no one to confirm); `"deny"` is strict worktree-confinement; **`"pass"` defers to the agent's own permissions (best for autonomous use); `"allow"` permits outright**. Catastrophic commands + protected-branch git **always deny** regardless. |
 
-Outside those areas, writes **inside** `<root>` → **ask** (or **deny** with `protectedWrites:"deny"`); writes **outside** `<root>` → **pass** (defer). Reads of non-sensitive files → **allow**. Shell commands are parsed segment-by-segment (chains, pipes, subshells, `cd`, `git -C`, redirects).
+Outside those areas, writes **inside** `<root>` → **ask** (or **deny** with `protectedWrites:"deny"`); writes **outside** `<root>` → **pass** (defer). Reads of non-sensitive files → **allow**; reads of sensitive files → **ask** — including shell content-dumps (`cat`, `head`, `tail`, `less`, `grep`, `base64`, `xxd`, `strings`, …), so gating a secret can't be bypassed by shelling out. Metadata-only commands (`ls`, `stat`, `file`, `find`) don't reveal contents and stay **allow**. Shell commands are parsed segment-by-segment (chains, pipes, subshells, `cd`, `git -C`, redirects).
 
 ### `branch-guard`
 | Key | Type | Default | Meaning |
