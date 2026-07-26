@@ -127,6 +127,28 @@ fn cli_doctor_and_unknown() {
     assert_eq!(run(&["frobnicate"], "", &[]).code, 2);
 }
 
+#[test]
+fn init_adds_shim_to_shell_path_and_uninstall_strips_it() {
+    let home = tmp("inithome");
+    let hp = home.to_str().unwrap();
+    // SHELL=zsh → init writes the PATH block to <KEEL_HOME>/.zshrc; PATH has no agents/shim.
+    let env = &[
+        ("KEEL_HOME", hp),
+        ("SHELL", "/bin/zsh"),
+        ("PATH", "/usr/bin"),
+    ];
+    assert_eq!(run(&["init"], "", env).code, 0);
+    let rc = fs::read_to_string(home.join(".zshrc")).expect(".zshrc written");
+    assert!(rc.contains(".keel/bin"), "shim dir not added to PATH: {rc}");
+
+    run(&["uninstall"], "", env);
+    let after = fs::read_to_string(home.join(".zshrc")).unwrap_or_default();
+    assert!(
+        !after.contains(".keel/bin"),
+        "PATH block not stripped: {after}"
+    );
+}
+
 // ---- PreToolUse policy --------------------------------------------------
 
 #[test]

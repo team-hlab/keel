@@ -14,6 +14,7 @@ mod model;
 mod registry;
 mod runtime;
 mod shim;
+mod update;
 
 use std::panic::catch_unwind;
 use std::path::Path;
@@ -27,6 +28,7 @@ Every tool call passes through keel, which auto-permits, auto-denies, or asks yo
 usage:
   keel init                                     # attach keel to your installed agents
   keel apply | uninstall | doctor | status      # manage the install
+  keel update [--check]                         # update keel to the latest release
   keel run <claude|codex|antigravity> <stage>   # hook entrypoint (used by the hooks)
   keel stats [logfile]                          # summarize the decision log
   keel features | version
@@ -86,6 +88,7 @@ fn cli(args: &[String]) -> i32 {
         "init" => shim::init(),
         "apply" => shim::apply_all(),
         "uninstall" => shim::uninstall(),
+        "update" => update::run(&args[1..]),
         "doctor" | "status" => shim::doctor(),
         "version" | "--version" | "-V" => {
             println!("keel {}", env!("CARGO_PKG_VERSION"));

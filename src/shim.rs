@@ -84,6 +84,88 @@ fn path_has_bin_dir() -> bool {
         .unwrap_or(false)
 }
 
+/// The shell rc to write the PATH line into, from `$SHELL`. None if unsupported (fish etc.).
+fn shell_rc() -> Option<PathBuf> {
+    let shell = std::env::var("SHELL").ok()?;
+    let rc = match Path::new(&shell).file_name()?.to_str()? {
+        "zsh" => ".zshrc",
+        "bash" => ".bashrc",
+        _ => return None,
+    };
+    Some(agent::home().join(rc))
+}
+
+fn path_block(bin_dir: &Path) -> String {
+    format!(
+        "{}\nexport PATH=\"{}:$PATH\"\n{}\n",
+        consts::PATH_BLOCK_BEGIN,
+        bin_dir.display(),
+        consts::PATH_BLOCK_END,
+    )
+}
+
+/// Append keel's marked PATH block to `rc` if not already present. Returns whether it added.
+fn write_path_block(rc: &Path, bin_dir: &Path) -> bool {
+    let existing = std::fs::read_to_string(rc).unwrap_or_default();
+    if existing.contains(consts::PATH_BLOCK_BEGIN) {
+        return false; // idempotent
+    }
+    use std::io::Write;
+    let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(rc)
+    else {
+        return false;
+    };
+    let sep = if existing.is_empty() || existing.ends_with('\n') {
+        ""
+    } else {
+        "\n"
+    };
+    write!(f, "{sep}\n{}", path_block(bin_dir)).is_ok()
+}
+
+/// Remove keel's marked PATH block from `rc` (for uninstall).
+fn strip_path_block(rc: &Path) {
+    let Ok(text) = std::fs::read_to_string(rc) else {
+        return;
+    };
+    if !text.contains(consts::PATH_BLOCK_BEGIN) {
+        return;
+    }
+    let mut out = String::new();
+    let mut skipping = false;
+    for line in text.lines() {
+        if line.trim() == consts::PATH_BLOCK_BEGIN {
+            skipping = true;
+        }
+        if !skipping {
+            out.push_str(line);
+            out.push('\n');
+        }
+        if skipping && line.trim() == consts::PATH_BLOCK_END {
+            skipping = false;
+        }
+    }
+    let out = out.trim_end_matches('\n');
+    let _ = std::fs::write(
+        rc,
+        if out.is_empty() {
+            String::new()
+        } else {
+            format!("{out}\n")
+        },
+    );
+}
+
+/// Add the shim dir to the shell PATH (idempotent). Returns `(rc, newly_added)`.
+fn ensure_path_on_shell(bin_dir: &Path) -> Option<(PathBuf, bool)> {
+    let rc = shell_rc()?;
+    let added = write_path_block(&rc, bin_dir);
+    Some((rc, added))
+}
+
 pub fn init() -> i32 {
     let bin_dir = keel_bin_dir();
     if let Err(e) = std::fs::create_dir_all(&bin_dir) {
@@ -109,10 +191,21 @@ pub fn init() -> i32 {
         println!("keel init: attached to {}.", attached.join(", "));
     }
     if !path_has_bin_dir() {
-        println!(
-            "\n  Add the shim dir to PATH (then restart your shell):\n    export PATH=\"{}:$PATH\"",
-            bin_dir.display()
-        );
+        match ensure_path_on_shell(&bin_dir) {
+            Some((rc, true)) => println!(
+                "  added the shim dir to PATH in {} — restart your shell (or `source {}`).",
+                rc.display(),
+                rc.display()
+            ),
+            Some((rc, false)) => println!(
+                "  shim PATH already set in {} — restart your shell if it isn't active yet.",
+                rc.display()
+            ),
+            None => println!(
+                "  add the shim dir to PATH (then restart your shell):\n    export PATH=\"{}:$PATH\"",
+                bin_dir.display()
+            ),
+        }
     }
     0
 }
@@ -134,8 +227,11 @@ pub fn uninstall() -> i32 {
         let _ = agent::clean(a);
         std::fs::remove_file(keel_bin_dir().join(a.bin)).ok();
     }
+    if let Some(rc) = shell_rc() {
+        strip_path_block(&rc);
+    }
     std::fs::remove_dir_all(agent::home().join(consts::KEEL_DIR)).ok();
-    println!("keel uninstall: removed shims and keel-tagged hooks.");
+    println!("keel uninstall: removed shims, keel-tagged hooks, and the PATH block.");
     0
 }
 
@@ -196,6 +292,36 @@ mod tests {
         // shim dir is skipped → resolves to the real one
         assert_eq!(find_real_in(dirs, "claude", &shim, None), Some(real_claude));
         std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn path_block_write_idempotent_and_strip() {
+        let dir = std::env::temp_dir().join(format!("keel-rc-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rc = dir.join(".zshrc");
+        std::fs::write(&rc, "# user's own line\n").unwrap();
+        let bin = dir.join(".keel/bin");
+
+        assert!(write_path_block(&rc, &bin)); // first write adds
+        let txt = std::fs::read_to_string(&rc).unwrap();
+        assert!(txt.contains(consts::PATH_BLOCK_BEGIN));
+        assert!(txt.contains(&bin.display().to_string()));
+        assert!(txt.contains("# user's own line")); // user's content preserved
+
+        assert!(!write_path_block(&rc, &bin)); // idempotent — no second block
+        assert_eq!(
+            std::fs::read_to_string(&rc)
+                .unwrap()
+                .matches(consts::PATH_BLOCK_BEGIN)
+                .count(),
+            1
+        );
+
+        strip_path_block(&rc);
+        let after = std::fs::read_to_string(&rc).unwrap();
+        assert!(!after.contains(consts::PATH_BLOCK_BEGIN));
+        assert!(after.contains("# user's own line")); // only keel's block removed
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
