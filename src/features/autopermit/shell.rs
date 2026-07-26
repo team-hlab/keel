@@ -57,7 +57,7 @@ static PATTERN_READ: LazyLock<Regex> = LazyLock::new(|| rx(r"^(grep|egrep|fgrep|
 // gated on the wrapped command, not waved through. `command` is a POSIX alias-bypass primitive.
 static WRAPPER: LazyLock<Regex> = LazyLock::new(|| {
     rx(
-        r"^(command|builtin|exec|env|nohup|time|unbuffer|stdbuf\s+-\S+|ionice(\s+-\S+)*|nice(\s+-n\s+\d+|\s+-\d+)?|timeout(\s+-\S+)*\s+[\d.]+[smhd]?)\s+",
+        r"^(command|builtin|exec|env|nohup|time(\s+-\S+)*|unbuffer|stdbuf\s+-\S+|ionice(\s+-\S+)*|nice(\s+-n\s+\d+|\s+-\d+)?|timeout(\s+-\S+)*\s+[\d.]+[smhd]?)\s+",
     )
 });
 // A `find` action that runs a sub-command (which can dump file contents) — SAFE would
@@ -738,8 +738,7 @@ fn is_root_target(t: &str) -> bool {
 /// `busybox rm` all count), with a recursive flag and a root-equivalent operand. `tokenize` has
 /// unescaped/decoded/dequoted and we brace-expand, so `rm -rf "/"`, `rm -rf $'\x2f'`, `r\m -rf /`,
 /// `rm {-rf,} /` all match — and it does NOT fire on `echo "rm -rf /"` (echo is the command).
-fn catastrophic_rm(s: &str) -> bool {
-    let toks: Vec<String> = tokenize(s).iter().flat_map(|t| brace_expand(t)).collect();
+fn catastrophic_rm(toks: &[String]) -> bool {
     // command word: skip a busybox/toybox multicall prefix
     let start = match toks.first().map(|t| base_cmd(t)) {
         Some("rm") => 1,
@@ -764,22 +763,51 @@ fn catastrophic_rm(s: &str) -> bool {
     recursive && root
 }
 
-/// Whole-command scan for a catastrophic `rm`, at every simple-command boundary. Splits on
-/// separators AND paren boundaries (quote-aware) so `true && ( rm -rf / )`, `( a; rm -rf / )`,
-/// and `x | rm -rf /` are all caught — the per-segment classifier misses paren groups because it
-/// bails on `(` before seeing the inner `rm`. Quote-awareness keeps `echo "rm -rf /"` safe.
-fn scan_catastrophic_rm(cmd: &str) -> bool {
+/// Catastrophic `find`: rooted at a root-equivalent path with a `-delete` action or an
+/// `-exec/-execdir/-ok` sub-command that is `rm` — the same blast radius as a recursive root
+/// delete. `find` is in SAFE, so without this it would be affirmatively ALLOWED.
+fn catastrophic_find(toks: &[String]) -> bool {
+    if toks.first().map(|t| base_cmd(t)) != Some("find") {
+        return false;
+    }
+    if !toks[1..].iter().any(|t| is_root_target(t)) {
+        return false;
+    }
+    toks.iter().any(|t| t == "-delete")
+        || toks.windows(2).any(|w| {
+            matches!(w[0].as_str(), "-exec" | "-execdir" | "-ok") && base_cmd(&w[1]) == "rm"
+        })
+}
+
+/// Whole-command scan for a catastrophic delete (`rm` or `find`) at every simple-command
+/// boundary. Splits on separators AND paren boundaries (quote+backslash aware) so
+/// `true && ( rm -rf / )`, `( a; rm -rf / )`, `x | rm -rf /`, and `find / -delete` are all
+/// caught — the per-segment classifier misses paren groups (bails on `(`) and `find` (SAFE).
+/// Quote/backslash awareness keeps `echo "rm -rf /"` and `x="a\" ; rm -rf /"` from false-denying.
+fn scan_catastrophic(cmd: &str) -> bool {
     let mut pieces = vec![String::new()];
     let mut q: Option<char> = None;
+    let mut esc = false;
     for c in cmd.chars() {
+        if esc {
+            pieces.last_mut().unwrap().push(c);
+            esc = false;
+            continue;
+        }
         match q {
             Some(qc) => {
                 pieces.last_mut().unwrap().push(c);
-                if c == qc {
+                if c == '\\' && qc == '"' {
+                    esc = true;
+                } else if c == qc {
                     q = None;
                 }
             }
             None => match c {
+                '\\' => {
+                    pieces.last_mut().unwrap().push(c);
+                    esc = true;
+                }
                 '\'' | '"' => {
                     q = Some(c);
                     pieces.last_mut().unwrap().push(c);
@@ -789,9 +817,13 @@ fn scan_catastrophic_rm(cmd: &str) -> bool {
             },
         }
     }
-    pieces
-        .iter()
-        .any(|p| catastrophic_rm(&strip_prefixes(p.trim())))
+    pieces.iter().any(|p| {
+        let toks: Vec<String> = tokenize(&strip_prefixes(p.trim()))
+            .iter()
+            .flat_map(|t| brace_expand(t))
+            .collect();
+        catastrophic_rm(&toks) || catastrophic_find(&toks)
+    })
 }
 
 fn classify_write(
@@ -1003,9 +1035,9 @@ fn decide_bash_at(
     if cmd.is_empty() {
         return Decision::Pass;
     }
-    // Catastrophic `rm` of root at any command position (chains, pipes, paren groups) — checked
-    // whole-command so it's robust to segmentation and paren-group bail-outs.
-    if scan_catastrophic_rm(command) {
+    // Catastrophic delete of root at any command position (chains, pipes, paren groups, find)
+    // — checked whole-command so it's robust to segmentation and paren-group bail-outs.
+    if scan_catastrophic(command) {
         return Decision::Deny;
     }
     // Scan DENY over normalized variants so escaping (`r\m -rf /`), ANSI-C quoting
@@ -1160,6 +1192,13 @@ mod tests {
             "x || ( rm -rf / )",
             "rm -rf $HOME/",
             "rm -rf ${HOME}",
+            // round-6 panel: find -delete / -exec rm on root, and time-with-flag wrapper
+            "find / -delete",
+            "find / -name x -delete",
+            "find / -exec rm -rf {} +",
+            "find / -execdir /bin/rm -rf {} ;",
+            "time -p rm -rf /",
+            "time --verbose rm -rf /",
         ] {
             assert_eq!(d(c, ROOT), Decision::Deny, "{c}");
         }
@@ -1168,6 +1207,8 @@ mod tests {
             "echo \"please rm -rf / now\"",
             "grep 'rm -rf /' script.sh",
             "cat notes-about-rm-rf.md",
+            "x=\"a\\\" ; rm -rf /\"", // escaped quote inside dq — rm is string data
+            "find . -name '*.log' -delete", // -delete but NOT rooted → not catastrophic
         ] {
             assert_ne!(d(c, ROOT), Decision::Deny, "false-deny: {c}");
         }
